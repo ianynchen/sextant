@@ -1124,6 +1124,8 @@ def test_config_bearing_extensions_pins_both_directions_against_the_real_registr
     assert {reader.__class__.__name__ for reader in config_readers} == {
         "DotenvReader",
         "PropertiesReader",
+        # Claims whole file names (`pytest.ini`, `pyproject.toml`), no extension.
+        "PytestSettingsReader",
         "YamlConfigReader",
     }
     # Direction 1: every extension THIS MODULE claims is config-bearing is

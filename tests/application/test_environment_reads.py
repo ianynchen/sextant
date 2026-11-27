@@ -89,6 +89,18 @@ def _loaded(directory, text: str):
     return YamlCatalogSource(directory).environment_reads()
 
 
+def test_a_text_parameter_joined_into_another_text_is_still_read(tmp_path, libraries):
+    """Rule 7 in Python (ruled 2026-11-26): no call can change a `str`, so `key + "_FILE"`
+    handed to a call before the read is no hand-off of `key` (healthchecks' `envsecret`)."""
+    body = (
+        "    requests.get(read('U'))\n"
+        "def read(key: str) -> str | None:\n"
+        "    os.getenv(key + '_FILE')\n"
+        "    return os.getenv(key)\n"
+    )
+    assert _addresses(tmp_path, libraries, body) == [(None, "${U}", "resolved")]
+
+
 def test_the_shipped_entries_read_as_the_typeshed_symbols():
     from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
     from sextant.resources import catalogs_dir
@@ -97,7 +109,17 @@ def test_the_shipped_entries_read_as_the_typeshed_symbols():
         (entry["owner"], entry["method"])
         for entry in YamlCatalogSource(catalogs_dir()).environment_reads()
     }
-    assert found == {("os#", "getenv"), ("os/_Environ#", "__getitem__"), ("os/_Environ#", "get")}
+    assert found == {
+        ("os#", "getenv"),
+        ("os/_Environ#", "__getitem__"),
+        ("os/_Environ#", "get"),
+        ("os/_Environ#", "setdefault"),
+        *(
+            (f"environs/{owner}#", method)
+            for owner in ("Env", "FileAwareEnv")
+            for method in ("__call__", "str", "bool", "int", "float", "list", "json")
+        ),
+    }
 
 
 @pytest.mark.parametrize(

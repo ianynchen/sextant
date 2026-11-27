@@ -6619,6 +6619,39 @@ file, so the file pass skips it; a value that is no word is a `CatalogError`. It
 `pydantic-settings.yml`, the Python family's one config model (`config_model_of` takes one
 model per module), and the setting's name stays in the catalog that owns it. A module with no
 such setting (Flask, FastAPI, a reusable Django app) gets no row from it and stays `default`.
+**Which of those modules are environments (ruled 2026-11-26, D3).** A settings module that
+another settings module takes a name of (`from .base import *`) is a building block and no
+environment, unless code starts a process with it. The start is a stated environment read
+(§1f `environment_reads`) of a key the model's `profiles.active_keys` names, with the module's
+dotted name as its written default: `os.environ.setdefault("DJANGO_SETTINGS_MODULE",
+"bookwyrm.settings")`. `active_keys` has the role it has for Spring (`spring.profiles.active`):
+the key that selects which settings a process has. Measured: zulip `zproject.computed_settings`
+is no environment (`zproject.settings` builds on it, nothing starts it); bookwyrm keeps both
+(`celerywyrm.settings` builds on `bookwyrm.settings`, which `manage.py` starts). A model with
+no `active_keys` keeps every module. Stated limit: a start written `os.environ[key] = module`
+is not read (zulip, 3 scripts, each for a module `manage.py` starts too).
+
+**Test settings are no environment (ruled 2026-11-26).** The module the test tool's settings
+file names with a key of `active_keys` (`DJANGO_SETTINGS_MODULE = weblate.settings_test` under
+`[tool.pytest.ini_options]`) is test settings where it builds on another settings module:
+only the tests select it, so it is test code, no environment and no builder, and a start with
+it (weblate's `scripts/benchmark-search.py`) keeps nothing. A named module that builds on no
+other is the one the deployment runs too (bookwyrm's `pytest.ini` names `bookwyrm.settings`).
+The settings file reaches the resolve as facts: `ingress/read/pytest_settings.py` reads the
+file pytest would choose at the module's root (claimed by name, as a dotenv file is) into a
+document of language `pytest`, one config entry per setting written as one text; no source
+matches that language, so it gives no `resolved_config` row. The test settings module and
+the script are still scanned (ruled "B"): their own call edges stay in the data. Stated
+limits: the settings file is looked for at the module's root only; a development module the
+pytest settings name, that builds on a base and that `manage.py` starts too, is read as test
+settings (0 of 4 projects); `addopts = --ds=...` is not read.
+
+**`key_names: upper_case`** on that source (ruled 2026-11-26) says which names are keys: only
+a name that is upper case by the language's own test (`str.isupper`), which is Django's rule
+(`Settings.__init__`: `if setting.isupper()`). A helper name the module holds
+(`default_loaders = [...]`) is then no key and gets no row. `upper_case` is the one value;
+another value, or the word on a source that is no `from_module_holding`, is a `CatalogError`.
+Absent: every name is a key.
 Stated limits: OI-554 (a template module is an environment; a module the repository does not
 ship is none; which module a process selects is not read), OI-568, OI-569.
 

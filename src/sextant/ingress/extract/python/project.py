@@ -76,6 +76,10 @@ class ModuleHeader:
     # (`star_bases`' shortcut). What it binds is not known. Also set where the module body
     # runs a text as its own code (`_runs_a_text`): that binds names nothing here reads.
     stars_unread: bool = False
+    # The names the module body binds with an assignment after its last top-level
+    # `from m import *` (ruled 2026-11-26): what runs last binds the name, so no star the
+    # header reads replaces them (`from .base import *`, then `DEBUG = False`).
+    settled: frozenset[str] = frozenset()
 
 
 def header_digest(tree: ast.Module) -> str:
@@ -98,6 +102,29 @@ def _runs_a_text(node: ast.AST) -> bool:
         and isinstance(node.value.func, ast.Name)
         and node.value.func.id == "exec"
     )
+
+
+def _settled(body: list[ast.stmt]) -> frozenset[str]:
+    """The names a module body assigns, in a statement of its own top level, after its last
+    top-level `from m import *` (`ModuleHeader.settled`)."""
+    last = max(
+        (
+            at
+            for at, node in enumerate(body)
+            if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names)
+        ),
+        default=-1,
+    )
+    found: set[str] = set()
+    for node in body[last + 1 :]:
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets = [node.target]
+        else:
+            continue
+        found.update(target.id for target in targets if isinstance(target, ast.Name))
+    return frozenset(found)
 
 
 def _module_statements(body: list[ast.stmt]) -> Iterator[ast.AST]:
@@ -290,13 +317,17 @@ class ProjectHeaders:
         """Whether a `from m import *` of `module` may bind `name`, beside what the module's
         own statements bind it to: a star whose source is read and binds the name, and a star
         whose source is not read (a library, a file that is absent, a star inside an `if` or
-        a `try`). Where the star is written, before or after the module's own write, is not
-        read (OI-565): the name then has no one value this reading can state."""
+        a `try`). A name the module body assigns after its last star (`settled`) is the
+        module's own: no star the header reads replaces it. The other order, a write and
+        then a star that binds the name, is not read as the star's value (OI-565): the name
+        then has no one value this reading can state."""
         header = self.header(module)
         if header is None or module in seen:
             return False
         if header.stars_unread:
             return True
+        if name in header.settled:
+            return False
         for base in header.stars:
             source = self.header(base)
             if source is None:
@@ -638,6 +669,7 @@ class ProjectHeaders:
         classes, returns, fields, aliases, factories = self._read(tree, module, types, is_package)
         # Read before the digest: it strips the tree.
         bases = star_bases(tree.body, module, is_package=is_package)
+        settled = _settled(tree.body)
         exports = star_exports(tree.body)
         written = sum(
             alias.name == "*"
@@ -656,4 +688,5 @@ class ProjectHeaders:
             bases,
             exports,
             written != len(bases) or any(map(_runs_a_text, _module_statements(tree.body))),
+            settled,
         )

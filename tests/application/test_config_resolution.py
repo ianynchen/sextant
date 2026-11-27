@@ -505,6 +505,21 @@ def test_a_module_source_naming_no_catalog_word_is_refused(tmp_path: Path):
     workspace.load_facts(tmp_path / "facts")
     with pytest.raises(CatalogError, match="from_module_holding"):
         resolve_config(workspace, [_catalog({"sources": [{"from_module_holding": 3}]})])
+    # `key_names` has one value, and is a word of a module source alone.
+    for broken in (
+        {"from_module_holding": "root_setting", "key_names": "lower_case"},
+        {"pattern": "app.yml", "key_names": "upper_case"},
+    ):
+        with pytest.raises(CatalogError, match="key_names"):
+            resolve_config(workspace, [_catalog({"sources": [broken]})])
+    resolve_config(
+        workspace,
+        [
+            _catalog(
+                {"sources": [{"from_module_holding": "root_setting", "key_names": "upper_case"}]}
+            )
+        ],
+    )
     resolve_config(workspace, [_catalog({"sources": [{"from_module_holding": "root_setting"}]})])
     assert workspace.query("resolved_config") == []
     workspace.close()

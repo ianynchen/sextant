@@ -5,7 +5,7 @@
   "build": "none",
   "environment": "`build` is `none` on purpose. The `.venv` in the clone is the environment every number of plan 2026-11-23 was measured in, and `scripts/field_check.py` cannot rebuild it: `uv sync --frozen --no-install-project` installs the default dependency groups, which for weblate add 96 development packages and remove `psycopg` and `psycopg-binary`. No group or extra selection reproduces the existing `.venv` exactly (`--no-dev` and `--no-dev --extra postgres` each differ by two packages). Python 3.13.14. On a clone without that `.venv` the counts can differ.",
   "oracle": "Django's own resolver, walked by tests/e2e/django_oracle.py in this clone's environment (the controller's run for plan 2026-11-23-python-django-redesign; the walk also calls each view to find its allowed methods). The oracle file itself is a scratch file and is not kept in the repository; the numbers below are the compare of 2026-11-24 (Task 10). ",
-  "notes": "Compared row by row with Django's resolver on 2026-11-24: 913 (method, route) pairs Django serves. A: 236 rows (247 Django pairs, 11 of them as one row per method where Django answers any). B: 2 `B_method` rows, POST of `WeblateBegin/CompleteCredentialRegistrationView` (`weblate/accounts/urls.py:45-54`): true. The library `django_otp_webauthn.views.BaseWebAuthnView.dispatch` calls `initial` and then `super().dispatch` (the method table, POST only); where `initial` raises an `OTPWebAuthnApiError` it answers every method with a JSON error. The oracle's request has no login, so it saw that error for every method. E: 0. Under a deployment condition (`not evaluated`): 35 per-method rows and 12 rows at paths the oracle's settings do not serve (`weblate.legal`, `weblate.billing`). Not resolved at a served route: 52 any-method rows doubted, 58 with a `handler_pass_through` question, 15 naming no handler (10 DRF `APIView` routes), 10 per-method rows partial, 1 regex route; 4 rows behind the `<prefix>` hole (`weblate/addons/api.py` routes no root reaches). D: 510: 253 DRF router routes, 252 Django admin, 5 others. Questions: handler_pass_through 62, mount_prefix 4. No outbound rows. Cold analyze 40.1 s (scan 19.2 s, resolve 19.9 s), median of three, 2026-11-24.",
+  "notes": "Compared row by row with Django's resolver on 2026-11-24: 913 (method, route) pairs Django serves. A: 236 rows (247 Django pairs, 11 of them as one row per method where Django answers any). B: 2 `B_method` rows, POST of `WeblateBegin/CompleteCredentialRegistrationView` (`weblate/accounts/urls.py:45-54`): true. The library `django_otp_webauthn.views.BaseWebAuthnView.dispatch` calls `initial` and then `super().dispatch` (the method table, POST only); where `initial` raises an `OTPWebAuthnApiError` it answers every method with a JSON error. The oracle's request has no login, so it saw that error for every method. E: 0. Under a deployment condition (`not evaluated`): 35 per-method rows and 12 rows at paths the oracle's settings do not serve (`weblate.legal`, `weblate.billing`). Not resolved at a served route: 52 any-method rows doubted, 58 with a `handler_pass_through` question, 15 naming no handler (10 DRF `APIView` routes), 10 per-method rows partial, 1 regex route; 2 rows behind the `<prefix>` hole (`weblate/addons/api.py` routes no root reaches; until 2026-11-26 also the two `security.txt` routes of `weblate/urls.py:1382-1397`, written in a tuple handed to `extend`: the walk read a list inside a list wrongly, and they are now at `/security.txt` and `/.well-known/security.txt` under `'weblate.legal' in settings.INSTALLED_APPS`). D: 510: 253 DRF router routes, 252 Django admin, 5 others. Questions: handler_pass_through 62, mount_prefix 4. No outbound rows. Cold analyze 40.1 s (scan 19.2 s, resolve 19.9 s), median of three, 2026-11-24.",
   "endpoints": {
     "inbound": {
       "http": 493
@@ -349,10 +349,9 @@
       "any /-/pow/check/",
       "any /-/pow/verify/",
       "any /.well-known/change-password",
-      "any /<prefix>.well-known/security.txt",
+      "any /.well-known/security.txt",
       "any /<prefix>builds/",
       "any /<prefix>builds/<str:package>/<int:version>/",
-      "any /<prefix>security.txt",
       "any /access/<name:project>/",
       "any /accounts/auth/first-factor/verify/",
       "any /accounts/complete/<slug:backend>/",
@@ -487,6 +486,7 @@
       "any /saved-searches/project/<name:project>/edit/<int:pk>/",
       "any /search/",
       "any /search/<object_path:path>/",
+      "any /security.txt",
       "any /settings/<object_path:path>/",
       "any /site.webmanifest",
       "any /sitemap-<slug:section>.xml",

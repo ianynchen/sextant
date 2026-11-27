@@ -5,7 +5,13 @@ displayName: Reads of the process environment, which a deployment sets
 # reads a key by name is the expression `${KEY}` — the deployment's to set, as a `${…}`
 # placeholder is. A literal default renders as `${KEY:-default}`, used only where nothing sets the key; a key that is no
 # literal is `non_enumerable`. The symbols are the ones typeshed declares: `os.getenv`, and
-# `__getitem__` and `get` on `os._Environ`, the class of `os.environ`.
+# `__getitem__`, `get` and `setdefault` on `os._Environ`, the class of `os.environ`
+# (`setdefault(k, d)` returns what the environment has for `k`, else `d`: a read with a default).
+#
+# `environs` (ruled 2026-11-26): `env("KEY", default)` and its typed forms read the key too.
+# `FileAwareEnv` takes the value from the file `KEY_FILE` names where that is set, before
+# `KEY`: the entry states the key the deployment sets, not the second source (OI-578). Inside
+# `env.prefixed(p)` the key read is `p + name`: not stated here.
 
 environment_reads:
   - { owner: os, method: getenv, key_arg: { arg: 0, keyword: key },
@@ -13,3 +19,33 @@ environment_reads:
   - { owner: os._Environ, method: __getitem__, key_arg: 0, by: scripts/probes/environment_reads.md }
   - { owner: os._Environ, method: get, key_arg: { arg: 0, keyword: key },
       default_arg: { arg: 1, keyword: default }, by: scripts/probes/environment_reads.md }
+  - { owner: os._Environ, method: setdefault, key_arg: { arg: 0, keyword: key },
+      default_arg: { arg: 1, keyword: value }, by: scripts/probes/environment_reads.md }
+  - { owner: environs.Env, method: __call__, key_arg: { arg: 0, keyword: name },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environs_reads.md }
+  - { owner: environs.Env, method: str, key_arg: { arg: 0, keyword: name },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environs_reads.md }
+  - { owner: environs.Env, method: bool, key_arg: { arg: 0, keyword: name },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environs_reads.md }
+  - { owner: environs.Env, method: int, key_arg: { arg: 0, keyword: name },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environs_reads.md }
+  - { owner: environs.Env, method: float, key_arg: { arg: 0, keyword: name },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environs_reads.md }
+  - { owner: environs.Env, method: list, key_arg: { arg: 0, keyword: name },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environs_reads.md }
+  - { owner: environs.Env, method: json, key_arg: { arg: 0, keyword: name },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environs_reads.md }
+  - { owner: environs.FileAwareEnv, method: __call__, key_arg: { arg: 0, keyword: name },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environs_reads.md }
+  - { owner: environs.FileAwareEnv, method: str, key_arg: { arg: 0, keyword: name },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environs_reads.md }
+  - { owner: environs.FileAwareEnv, method: bool, key_arg: { arg: 0, keyword: name },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environs_reads.md }
+  - { owner: environs.FileAwareEnv, method: int, key_arg: { arg: 0, keyword: name },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environs_reads.md }
+  - { owner: environs.FileAwareEnv, method: float, key_arg: { arg: 0, keyword: name },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environs_reads.md }
+  - { owner: environs.FileAwareEnv, method: list, key_arg: { arg: 0, keyword: name },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environs_reads.md }
+  - { owner: environs.FileAwareEnv, method: json, key_arg: { arg: 0, keyword: name },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environs_reads.md }

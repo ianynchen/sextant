@@ -17,6 +17,12 @@ measured:
       by: scripts/probes/pydantic_settings_rules.md }
 
 config_model:
+  # The key that selects the settings module a process loads (ruled 2026-11-26, D3; the role
+  # of `spring.profiles.active`): a settings module another builds on is an environment only
+  # where code starts a process with it, a read of this key with the module as its default
+  # (`os.environ.setdefault("DJANGO_SETTINGS_MODULE", "app.settings")`).
+  profiles:
+    active_keys: [DJANGO_SETTINGS_MODULE]
   sources:
     # The file the settings class's config call names with its `env_file` argument: a string or a
     # tuple of strings written in the call (the later file overrides the earlier). One unprofiled
@@ -29,7 +35,9 @@ config_model:
     # environment: one row per name the module holds, the value read by the value walk,
     # through `from .base import *`. This model is the Python family's one config model, so
     # the form is written here and the setting's name stays in the catalog that owns it.
-    - { from_module_holding: root_setting }
+    # `key_names: upper_case` (ruled 2026-11-26): Django takes only an upper-case name of
+    # the module as a setting (`Settings.__init__`), so a helper name it holds is no key.
+    - { from_module_holding: root_setting, key_names: upper_case }
   # How a settings class is written: the class-body field holding the config call, and the calls
   # that make it (`SettingsConfigDict(...)`, or a dict display, which the scanner writes as the
   # `dict(...)` it builds). The same forms `shape-models/pydantic.yml` reads in its own context.

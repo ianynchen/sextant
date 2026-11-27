@@ -97,7 +97,14 @@ FROM_ARGUMENT = "from_argument"
 # D02 §2i's source entry naming the modules that hold a setting (ruling R3 of 2026-11-25):
 # no file is matched for it; `resolve/settings_modules.py` reads the modules.
 FROM_MODULE = "from_module_holding"
+# Which names of such a module are keys (ruled 2026-11-26): `upper_case` is Django's rule
+# (`Settings.__init__`: `if setting.isupper()`). Absent: every name.
+KEY_NAMES = "key_names"
+UPPER_CASE = "upper_case"
 NAMED_FILE_LANGUAGE = "dotenv"
+# The document language of the test tool's settings file (`ingress/read/pytest_settings.py`):
+# no source matches it; `resolve/settings_modules.py` reads which settings module it names.
+TEST_TOOL_LANGUAGE = "pytest"
 
 _DEFAULT_PLACEHOLDERS = {"open": "${", "close": "}", "default_separator": ":"}
 
@@ -251,6 +258,13 @@ def _validate_model(catalog: Catalog) -> None:
                 f"loading catalog {catalog.source}: config_model.sources `{FROM_MODULE}` is "
                 f"the word of `matches` a catalog names a setting with, got "
                 f"{source[FROM_MODULE]!r}"
+            )
+        if source.get(KEY_NAMES, UPPER_CASE) != UPPER_CASE or (
+            KEY_NAMES in source and FROM_MODULE not in source
+        ):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: config_model.sources `{KEY_NAMES}` is "
+                f"`{UPPER_CASE}`, on a `{FROM_MODULE}` source alone, got {source!r}"
             )
 
 

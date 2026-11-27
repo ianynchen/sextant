@@ -73,6 +73,85 @@ def test_each_module_holding_the_root_setting_is_an_environment(tmp_path: Path, 
     assert not [key for _, key in config if key in ("OTHER", "urlpatterns")]
 
 
+def test_only_an_upper_case_name_is_a_key(tmp_path: Path, libraries):
+    """Django takes a name of a settings module as a setting only where it is upper case
+    (`Settings.__init__`: `if setting.isupper()`), so a helper name the module holds is no
+    key (ruled 2026-11-26; the source's `key_names: upper_case`). bookwyrm's
+    `default_loaders` was a row before."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "ROOT_URLCONF = 'app.urls'\nloaders = 'x'\nMixed = 2\n"
+            "_private = 3\nAPI_V2 = 'on'\n_HIDDEN = 4\nX = 5\n_ = 6\n",
+            "settings_dev.py": "ROOT_URLCONF = 'app.urls'\nextra = 1\n",
+            "urls.py": _URLS,
+        },
+    )
+
+    assert sorted({key for _, key in _config(workspace)}) == [
+        "API_V2",
+        "ROOT_URLCONF",
+        "X",
+        "_HIDDEN",
+    ]
+
+
+def test_settings_only_the_tests_select_are_no_environment(tmp_path: Path, libraries):
+    """The module the pytest settings name (`DJANGO_SETTINGS_MODULE`) that builds on another
+    settings module is test settings (ruled 2026-11-26; weblate's `settings_test`, which
+    takes `settings_example` with a star): no environment, and no builder, so the module it
+    builds on stays one. A script that starts a process with it (weblate's
+    `scripts/benchmark-search.py`) is test code too and keeps nothing."""
+    files = {
+        "settings.py": "ROOT_URLCONF = 'app.urls'\nDEBUG = False\n",
+        "testing.py": "from app.settings import *\nDEBUG = True\n",
+        "bench.py": _START.format("app.testing"),
+        "urls.py": _URLS,
+    }
+    named = "[pytest]\nDJANGO_SETTINGS_MODULE = app.testing\n"
+    workspace = _resolved(tmp_path / "a", libraries, files, pytest_ini=named)
+    assert sorted({environment for environment, _ in _config(workspace)}) == ["app.settings"]
+
+    # bookwyrm: the pytest settings name the module the deployment runs, which builds on
+    # no other: it stays an environment.
+    workspace = _resolved(
+        tmp_path / "b",
+        libraries,
+        {**files, "manage.py": _START.format("app.settings")},
+        pytest_ini="[pytest]\nDJANGO_SETTINGS_MODULE = app.settings\n",
+    )
+    assert sorted({environment for environment, _ in _config(workspace)}) == [
+        "app.settings",
+        "app.testing",
+    ]
+
+
+@pytest.mark.parametrize("owner", ["Env", "FileAwareEnv"])
+def test_a_read_through_environs_is_the_key_expression(tmp_path: Path, libraries, owner):
+    """`env.bool("DEBUG", False)` on an `environs` reader is a read of the key `DEBUG`
+    (ruled 2026-11-26; `scripts/probes/environs_reads.md`), as `os.environ.get` is. bookwyrm
+    writes its settings this way. `FileAwareEnv` also takes the value from the file
+    `DEBUG_FILE` names: the key the deployment sets is still `DEBUG` (OI-578)."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": f"from environs import {owner}\nenv = {owner}()\n"
+            "ROOT_URLCONF = 'app.urls'\nDEBUG = env.bool('DEBUG', False)\n"
+            "SECRET = env('SECRET_KEY')\nPORT = env.int('PORT', 5432)\n"
+            "NAME = env.str(name='NAME', default='shop')\n",
+            "urls.py": _URLS,
+        },
+    )
+
+    config = _config(workspace)
+    assert config[("app.settings", "DEBUG")] == ("${DEBUG:-False}", None)
+    assert config[("app.settings", "SECRET")] == ("${SECRET_KEY}", None)
+    assert config[("app.settings", "PORT")] == ("${PORT:-5432}", None)
+    assert config[("app.settings", "NAME")] == ("${NAME:-shop}", None)
+
+
 def test_a_settings_module_holds_what_a_star_import_gives_it(tmp_path: Path, libraries):
     """`from app.settings import *`, then one name written again (weblate's `settings_test`; a file a test runner collects is not read):
     the module holds the root setting through the star, so it is an environment; its own
@@ -91,7 +170,38 @@ def test_a_settings_module_holds_what_a_star_import_gives_it(tmp_path: Path, lib
     assert config[("app.settings_ci", "ROOT_URLCONF")] == ("app.urls", None)
     assert config[("app.settings_ci", "DEBUG")] == ("True", None)
     assert config[("app.settings_ci", "LIMIT")] == ("5", None)
-    assert config[("app.settings", "DEBUG")] == ("False", None)
+
+
+_START = "import os\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', '{}')\n"
+
+
+def test_a_settings_module_another_builds_on_is_no_environment(tmp_path: Path, libraries):
+    """A settings module another settings module builds on is a building block and no
+    environment, unless code starts a process with it (ruled 2026-11-26, D3; zulip's
+    `computed_settings`, which `settings` takes with a star). The start is a read of the key
+    the config model's `profiles.active_keys` names, with the module as its default
+    (`os.environ.setdefault("DJANGO_SETTINGS_MODULE", "app.settings")`)."""
+    files = {
+        "base.py": "ROOT_URLCONF = 'app.urls'\nDEBUG = False\n",
+        "settings.py": "from app.base import *\nDEBUG = True\n",
+        "worker.py": "from app.settings import *\nLIMIT = 5\n",
+        "urls.py": _URLS,
+    }
+    workspace = _resolved(tmp_path / "a", libraries, files)
+    assert sorted({environment for environment, _ in _config(workspace)}) == ["app.worker"]
+    # The root is written in the building block: its name is still the key `ROOT_URLCONF`,
+    # decided in the environment that builds on it (zulip's `computed_settings`).
+    assert [row[1:6] for row in _existence(workspace)] == [
+        ("property", "ROOT_URLCONF == 'app.urls'", ("ROOT_URLCONF",), "app.worker", "true")
+    ]
+
+    # bookwyrm: `celerywyrm.settings` builds on `bookwyrm.settings`, which `manage.py` starts.
+    workspace = _resolved(
+        tmp_path / "b", libraries, {**files, "manage.py": _START.format("app.settings")}
+    )
+    config = _config(workspace)
+    assert sorted({environment for environment, _ in config}) == ["app.settings", "app.worker"]
+    assert config[("app.settings", "LIMIT")] == (None, "external")
 
 
 def test_a_setting_with_no_one_value_states_a_reason(tmp_path: Path, libraries):
@@ -110,10 +220,70 @@ def test_a_setting_with_no_one_value_states_a_reason(tmp_path: Path, libraries):
 
     config = _config(workspace)
     assert config[("app.settings", "MODE")] == (None, "not_readable")
-    assert config[("app.settings", "APPS")] == (None, "not_readable")
+    assert config[("app.settings", "APPS[0]")] == ("one", None)
+    assert config[("app.settings", "APPS[1]")] == ("two", None)
+    assert ("app.settings", "APPS") not in config
     assert config[("app.settings", "NAME")][0] is None
     assert config[("app.settings", "NAME")][1] is not None
     assert config[("app.settings", "NOTHING")] == (None, "not_readable")
+
+
+def test_a_list_setting_is_one_key_for_each_member(tmp_path: Path, libraries):
+    """A setting written as a list is one key per member, `K[0]`, `K[1]`, the form a YAML
+    list has (ruled 2026-11-25, Q4 part 2), a member that is a list `K[0][1]`. An addition
+    to the list is a write of it, so its members are keys too. Where a member is not read,
+    the read members are keys and `K` keeps one reason. A list with a member added under a
+    test has no one membership: `K` keeps its reason and no member is a key."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "import os\nimport socket\nROOT_URLCONF = 'app.urls'\n"
+            "APPS = ['one', 'two']\nAPPS += ['three']\n"
+            "LANGUAGES = [('en', 'English'), ('de', 'German')]\n"
+            "HOSTS = ['localhost', socket.gethostname()]\n"
+            "EXTRA = ['one']\nif os.environ.get('X'):\n    EXTRA += ['two']\n",
+            "settings_ci.py": "ROOT_URLCONF = 'app.urls'\nAPPS = ['one']\n",
+            # bookwyrm's `celerywyrm.settings`: the list a star import gives, with one more.
+            "settings_job.py": "from app.settings import *\nAPPS = APPS + ['job']\n",
+            # As bookwyrm's `manage.py`: the module another builds on is started, so it stays.
+            "manage.py": _START.format("app.settings"),
+            "urls.py": _URLS,
+        },
+    )
+
+    config = _config(workspace)
+    assert config[("app.settings_job", "APPS")] == (None, "not_readable")
+    assert ("app.settings_job", "APPS[0]") not in config
+    held = {
+        key: value for (environment, key), value in config.items() if environment == "app.settings"
+    }
+    assert {key: held[key] for key in held if key.startswith("APPS")} == {
+        "APPS[0]": ("one", None),
+        "APPS[1]": ("two", None),
+        "APPS[2]": ("three", None),
+    }
+    assert {key: held[key] for key in held if key.startswith("LANGUAGES")} == {
+        "LANGUAGES[0][0]": ("en", None),
+        "LANGUAGES[0][1]": ("English", None),
+        "LANGUAGES[1][0]": ("de", None),
+        "LANGUAGES[1][1]": ("German", None),
+    }
+    assert held["HOSTS[0]"] == ("localhost", None)
+    assert held["HOSTS"][0] is None and held["HOSTS"][1] is not None
+    assert "HOSTS[1]" not in held
+    assert held["EXTRA"] == (None, "not_readable")
+    assert not [key for key in held if key.startswith("EXTRA[")]
+    # The other settings module holds the name with one member: no "not set" row for it or
+    # for a member it does not have; a name it does not hold at all is not set, as before.
+    other = {
+        key: value
+        for (environment, key), value in config.items()
+        if environment == "app.settings_ci"
+    }
+    assert {key for key in other if key.startswith("APPS")} == {"APPS[0]"}
+    assert other["HOSTS"] == (None, "external")
+    assert not [key for key in other if key.startswith(("HOSTS[", "LANGUAGES["))]
 
 
 def test_a_program_with_no_root_setting_has_no_environment(tmp_path: Path, libraries):
@@ -321,9 +491,9 @@ _DOORS = {
         "base.py": "DEBUG = False\n" + _ABSENT,
         "settings.py": "from app.base import *\n" + _ROOT,
     },
-    "a write beside a star import that binds it": {
+    "a write, then a star import that binds it": {
         "base.py": "DEBUG = False\n",
-        "settings.py": "from app.base import *\n" + _ROOT + "DEBUG = True\n",
+        "settings.py": _ROOT + "DEBUG = True\nfrom app.base import *\n",
     },
 }  # fmt: skip
 
@@ -336,12 +506,35 @@ def test_a_test_on_a_setting_with_a_door_in_its_chain_is_not_evaluated(
     written literal or something outside the repository can give the key another value: an
     environment read, a write a star import can replace (ruling R10) anywhere in the chain
     of settings modules the key is read through, a text the module runs as its own code
-    (`exec`), a name with two values. The last case is the limit of OI-565: the order of a
-    write and a star import is not read."""
+    (`exec`), a name with two values. The last case is the limit of OI-565: a write, then a
+    star import that binds the name, is not read as the star's value."""
     workspace = _resolved(tmp_path, libraries, {**_DOORS[door], "urls.py": _DEBUG_URLS})
 
     assert sorted(row["path"] for row in workspace.query("endpoints")) == ["/d/", "/u/"]
     assert _verdicts(workspace, "settings.DEBUG") == {"app.settings": ("unresolved", "unresolved")}
+
+
+def test_a_setting_written_after_the_star_import_is_decided_on_its_own_write(
+    tmp_path: Path, libraries
+):
+    """`from app.base import *`, then `DEBUG = False` (ruled 2026-11-26): what runs last binds
+    the name, so the settings module's own write is its one value and the test is decided on
+    it, whatever the star gives. The common layout of a derived settings module."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "base.py": "ROOT_URLCONF = 'app.urls'\nDEBUG = True\n",
+            "settings.py": "from app.base import *\nDEBUG = False\n",
+            "urls.py": _DEBUG_URLS,
+            "manage.py": _START.format("app.base"),
+        },
+    )
+
+    assert _verdicts(workspace, "settings.DEBUG") == {
+        "app.base": ("true", "resolved"),
+        "app.settings": ("false", "resolved"),
+    }
 
 
 def test_a_setting_a_star_import_alone_gives_is_decided_on_its_source(tmp_path: Path, libraries):
@@ -381,18 +574,20 @@ def test_a_setting_written_with_no_one_value_says_why_in_the_evidence(tmp_path: 
         str(row["key"]): str(row["unresolved_detail"]) for row in workspace.query("resolved_config")
     }
     evidence = {row[3]: row[6] for row in _existence(workspace) if row[3] != ("ROOT_URLCONF",)}
+    details["APPS"] = "APPS is a list, one key for each member"
     assert evidence == {
         (key,): f"`{key}{_SET}app.settings` configuration sets no readable value: {details[key]}"
         for key in ("APPS", "MODE", "NOTHING")
     }
-    assert details["APPS"].endswith("not one value")
     assert "placeholder" not in "".join(evidence.values())
 
 
 def test_the_routes_of_a_root_exist_where_the_root_setting_names_it(tmp_path: Path, libraries):
     """Two settings modules name two roots: each root's routes carry the condition
-    "`ROOT_URLCONF` is `<root>`", kind `property`, "not evaluated" in every environment, with
-    what each environment sets as evidence. No row is removed and none is copied."""
+    "`ROOT_URLCONF` is `<root>`", kind `property`, with what each environment sets as
+    evidence. It is decided in each environment on the one text that settings module writes
+    for the root (ruled 2026-11-26), by the rule of a test on a setting: true where the module
+    names this root, false where it names the other. No row is removed and none is copied."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -407,18 +602,32 @@ def test_the_routes_of_a_root_exist_where_the_root_setting_names_it(tmp_path: Pa
     assert sorted(row["path"] for row in workspace.query("endpoints")) == ["/a/", "/u/"]
     assert _existence(workspace) == [
         ("/a/", "property", "ROOT_URLCONF == 'app.admin_urls'", ("ROOT_URLCONF",), "app.settings",
-         "unresolved", f"`ROOT_URLCONF{_SET}app.settings` configuration sets `app.urls`"),
+         "false", f"`ROOT_URLCONF{_SET}app.settings` configuration sets `app.urls`"),
         ("/a/", "property", "ROOT_URLCONF == 'app.admin_urls'", ("ROOT_URLCONF",),
-         "app.settings_admin", "unresolved",
+         "app.settings_admin", "true",
          f"`ROOT_URLCONF{_SET}app.settings_admin` configuration sets `app.admin_urls`"),
         ("/u/", "property", "ROOT_URLCONF == 'app.urls'", ("ROOT_URLCONF",), "app.settings",
-         "unresolved", f"`ROOT_URLCONF{_SET}app.settings` configuration sets `app.urls`"),
+         "true", f"`ROOT_URLCONF{_SET}app.settings` configuration sets `app.urls`"),
         ("/u/", "property", "ROOT_URLCONF == 'app.urls'", ("ROOT_URLCONF",), "app.settings_admin",
-         "unresolved",
+         "false",
          f"`ROOT_URLCONF{_SET}app.settings_admin` configuration sets `app.admin_urls`"),
     ]  # fmt: skip
     expression = json.loads(str(workspace.query("endpoint_existence")[0]["expression"]))
     assert expression["having_value"] in ("app.urls", "app.admin_urls")
+
+
+def test_a_root_a_star_import_can_replace_is_not_decided(tmp_path: Path, libraries):
+    """The door of every decided test (ruling R10): a root the settings module writes before
+    a star import of a file that is not read has no one value there. "Not evaluated"."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {"settings.py": "ROOT_URLCONF = 'app.urls'\n" + _ABSENT, "urls.py": _URLS},
+    )
+
+    assert _verdicts(workspace, "ROOT_URLCONF == 'app.urls'") == {
+        "app.settings": ("unresolved", "unresolved")
+    }
 
 
 def test_two_settings_modules_naming_one_root_give_one_condition(tmp_path: Path, libraries):

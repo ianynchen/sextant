@@ -56,7 +56,7 @@ from sextant.domain.facts import (
     ModuleFact,
 )
 from sextant.domain.ignorefile import IgnoreRules
-from sextant.domain.resource_files import list_files
+from sextant.domain.resource_files import TEST_TOOL_SETTINGS, list_files, named_file
 from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
 
 # The module fact's own document (`_write_module_fact`). Its `relative_path`,
@@ -454,6 +454,17 @@ def analyze(
     # the reader that claims each NAME. The walk above never sees them: the built-in ignore layer
     # hides every `.env` from it, and a file nothing names is never opened.
     unread = list(named_config_files(module, fact_root, catalogs.load(), ignore))
+    # The test tool's settings file, offered by name in the tool's order: the reader that
+    # claims the names reads the first that holds its settings (ruled 2026-11-26).
+    # shortcut: the module's root only, the scanner also looks in the folders above it;
+    # upgrade when a module below the folder of its pytest settings names test settings.
+    unread += [
+        settings_file
+        for name in TEST_TOOL_SETTINGS
+        if (settings_file := named_file(module.root, name)) is not None
+        and not ignore.matches(settings_file)
+        and settings_file not in unread
+    ]
     for reader in readers:
         owned = tuple(file for file in unread if reader.accepts(file.name))
         if not owned:

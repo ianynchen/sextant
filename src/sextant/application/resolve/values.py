@@ -133,7 +133,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from functools import lru_cache
-from itertools import product
+from itertools import pairwise, product
 from typing import Any, cast
 from weakref import WeakKeyDictionary
 
@@ -408,6 +408,8 @@ DEPTH_CAP = 80
 # primitives, `String` and the boxed primitives, as a descriptor spells a type. A property of
 # the TYPE, never of a method: read off the site's own descriptor for the parameter a value is
 # handed to, and off the facts for the VALUE's own type (fix round 1, M1 — `_Walk._type_of`).
+# Python's own (ruled 2026-11-26): `str`, `bytes` and the numbers, as `slot_of_type` spells
+# the type a parameter is written with (`key: str`).
 _UNCHANGEABLE = frozenset(
     {
         "Z",
@@ -427,6 +429,11 @@ _UNCHANGEABLE = frozenset(
         "Ljava/lang/Long;",
         "Ljava/lang/Float;",
         "Ljava/lang/Double;",
+        "Lbuiltins/str;",
+        "Lbuiltins/bytes;",
+        "Lbuiltins/int;",
+        "Lbuiltins/float;",
+        "Lbuiltins/bool;",
     }
 )
 # Where in a body a field write sits, which the fact does not say (D00 §5's `field_write`
@@ -2745,6 +2752,21 @@ class Path:
             if step.context[0] == _PASSED
         )
 
+    def members(self) -> tuple[int | None, ...] | None:
+        """The member of a written list this path read, as its index at each depth, outermost
+        first (`K[0][1]` is `(0, 1)`), None in the place of a member that was not read; `()`
+        for a value that is no member. None where the path read members of two lists (a list
+        held by name inside another)."""
+        steps = sorted(
+            (step for step in self.trail if step.context[0] == _ELEMENT_OF),
+            key=lambda step: len(step.context),
+        )
+        if any(b.context[: len(a.context)] != a.context for a, b in pairwise(steps)):
+            return None
+        return tuple(
+            int(index) if (index := step.label.split()[-1]).isdigit() else None for step in steps
+        )
+
     def written_under(self) -> tuple[tuple[str, str], ...]:
         """The writes under a test this path read a value through (`_WRITTEN_UNDER`), each as
         `(writing method, its tests)`, the tests as `field_writes.guards` spells them; and the
@@ -3490,7 +3512,7 @@ class Tests:
 
     def __init__(self, index: ValueIndex, identities: "Identities" = ()) -> None:
         self._walk = _Walk(index, identities, functions=True, deps=[])
-        # Each written name by its bare symbol (`setting`), built when first asked.
+        # Each written name by its bare symbol (`_symbol`), built when first asked.
         self._written: dict[str, str] | None = None
 
     def setting(self, name: str, when: str, method: str) -> bool | None:
@@ -3500,17 +3522,44 @@ class Tests:
         the walk gives the name exactly one written literal and nothing a deployment sets is
         in its chain (an environment read, a write a star import can replace). None where it
         is not decided, and for a name nothing writes."""
-        if self._written is None:
-            index = self._walk._index
-            self._written = {
-                bare_descriptor(symbol): symbol for symbol in (*index.constants, *index.produced)
-            }
-        symbol, judged = self._written.get(name), _WHEN.get(when)
+        symbol, judged = self._symbol(name), _WHEN.get(when)
         if symbol is None or judged is None:
             return None
         self._walk._computes = 0
         found = self._walk._decided({"kind": "field", "symbol": symbol}, judged, method, (), ())
         return found[0][1] if len(found) == 1 else None
+
+    def setting_is(self, name: str, value: str, method: str) -> bool | None:
+        """Whether the module name `name` is the written text `value` there (the root
+        condition, ruled 2026-11-26), by the rule of `setting`: decided on exactly one written
+        literal with nothing a deployment sets in its chain. None where it is not decided."""
+        symbol = self._symbol(name)
+        if symbol is None:
+            return None
+        self._walk._computes = 0
+        reached = self._walk._entry(
+            {"kind": "field", "symbol": symbol}, method, (_TEST_OF, method), (), ()
+        )
+        if len(reached) != 1:
+            return None
+        path, answer = reached[0]
+        if (
+            any(step.context[0] in (_ELEMENT_OF, _WRITTEN_UNDER) for step in path)
+            or _truth(answer) is None
+            or answer.kind != LITERAL
+            or answer.literal_kind == SYMBOL
+        ):
+            return None
+        return str(answer.value) == value
+
+    def _symbol(self, name: str) -> str | None:
+        """The written name whose bare symbol is `name`, built when first asked."""
+        if self._written is None:
+            index = self._walk._index
+            self._written = {
+                bare_descriptor(symbol): symbol for symbol in (*index.constants, *index.produced)
+            }
+        return self._written.get(name)
 
     def ran(
         self, method: str, guards: str, within: "Path | None"
@@ -4851,7 +4900,18 @@ class _Walk:
             return _only(trail, Answer(kind=ABSENT))
         return self._enumerated(
             [
-                (index, self._unpacked(element, method, origin, trail, frames))
+                (
+                    index,
+                    self._unpacked(
+                        element,
+                        method,
+                        # A member that is itself a written list is its own aggregate: with
+                        # the outer origin its members' steps would be the outer members'.
+                        (*origin, index) if isinstance(element.get("elements"), list) else origin,
+                        trail,
+                        frames,
+                    ),
+                )
                 for index, element in enumerate(elements)
             ],
             origin,

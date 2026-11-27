@@ -1667,8 +1667,10 @@ name that a star import of that module can replace, so the value written is not 
 the name holds (`DOCS = False`, then `try: from .local_config import *`). For a name the
 module's own statements bind: a `from m import *` of the module whose source is read and
 binds the name, whose source is not read (a library, a file that is absent), or that sits in
-an `if` or a `try`; where the star is written, before or after the write, is not read
-(OI-565). For a name star imports alone give (the write per variable a star takes, above):
+an `if` or a `try`. A name the module body assigns after its last top-level star import is
+the module's own, and no star the header reads gives it the mark (`from .base import *`,
+then `DEBUG = False`; ruled 2026-11-26). The other order, a write and then a star that binds
+the name, keeps the mark, and the star's value is not read as the name's (OI-565). For a name star imports alone give (the write per variable a star takes, above):
 a star of the module that is not read, or the name being replaceable in the module the last
 star takes it from. A module whose body runs a text as its own code (`exec(code)`, with or without a second argument such as `globals()`, outside a function or a class) is read as a module with a star that is not read: every name it writes carries the mark (the approved note of R3). Every write of such a name carries it, from any file. A read from another
 file of a marked name that a star alone gives names that module's own field

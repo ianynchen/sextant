@@ -10,6 +10,7 @@ from sextant.ingress.read.dotenv import DotenvReader
 from sextant.ingress.read.graphql_sdl import GraphqlSdlReader
 from sextant.ingress.read.properties import PropertiesReader
 from sextant.ingress.read.proto_source import ProtoSourceReader
+from sextant.ingress.read.pytest_settings import PytestSettingsReader
 from sextant.ingress.read.wsdl_xsd import WsdlXsdReader
 from sextant.ingress.read.yaml_config import YamlConfigReader
 
@@ -21,6 +22,7 @@ READERS: tuple[ArtifactReader, ...] = (
     PropertiesReader(),
     YamlConfigReader(),
     DotenvReader(),
+    PytestSettingsReader(),
     AvscReader(),
     ProtoSourceReader(),
     GraphqlSdlReader(),

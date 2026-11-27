@@ -13,6 +13,18 @@ from pathlib import Path
 
 from sextant.domain.ignorefile import IgnoreRules
 
+# The settings files of the test tool (pytest's, in its order of precedence), which `analyze`
+# offers by name to the reader that claims them (`ingress/read/pytest_settings.py`).
+TEST_TOOL_SETTINGS = (
+    "pytest.toml",
+    ".pytest.toml",
+    "pytest.ini",
+    ".pytest.ini",
+    "pyproject.toml",
+    "tox.ini",
+    "setup.cfg",
+)
+
 
 def list_files(root: Path, repo_root: Path, ignore: IgnoreRules) -> tuple[Path, ...]:
     """Every regular file under `root` that `.sextantignore` (2K design §2)

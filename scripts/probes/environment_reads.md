@@ -22,6 +22,7 @@ environment. The first line it prints is the version the running process reporte
 | set key | its value, whatever default the call carries |
 | `getenv(k) or d` against `getenv(k, d)` | differ for an empty value: the `or` falls back, the default form returns `""` |
 | parameters | `getenv(key, default)` and `environ.get(key, default)`, by position or keyword; `environ[key]` by position |
+| `environ.setdefault(key, value)` | `_Environ`'s own method; gives what the environment has for the key, else `value` (which it then sets): a read with a default, by position or keyword |
 
 ## Defining symbols
 
@@ -30,6 +31,7 @@ environment. The first line it prints is the version the running process reporte
 | `os.getenv` | function `getenv` of `stdlib/os/__init__.pyi` | two overloads: `(key)` and `(key, default)` |
 | `os.environ[key]` | `_Environ.__getitem__` | `environ: _Environ[str]` is a written type |
 | `os.environ.get(key[, default])` | `_Environ.get` | three overloads, `default` second |
+| `os.environ.setdefault(key, value)` | `_Environ.setdefault` | `value` second |
 
 ## What the value is (ruling N1)
 

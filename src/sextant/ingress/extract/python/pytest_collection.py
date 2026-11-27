@@ -33,6 +33,8 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from sextant.domain.resource_files import TEST_TOOL_SETTINGS
+
 _DEFAULT_FILES = ("test_*.py", "*_test.py")
 _CONFTEST = "conftest.py"
 _TEST_FOLDERS = frozenset({"tests", "test"})
@@ -42,7 +44,8 @@ _INI_FILES = ("pytest.ini", ".pytest.ini")
 _PYPROJECT = "pyproject.toml"
 _TOX = "tox.ini"
 _SETUP_CFG = "setup.cfg"
-_ORDER = (*_TOML_FILES, *_INI_FILES, _PYPROJECT, _TOX, _SETUP_CFG)
+_ORDER = TEST_TOOL_SETTINGS
+assert _ORDER == (*_TOML_FILES, *_INI_FILES, _PYPROJECT, _TOX, _SETUP_CFG)
 
 
 @dataclass(frozen=True)
@@ -63,7 +66,7 @@ class PytestCollection:
                 path = folder / name
                 if not path.is_file():
                     continue
-                settings = _settings(path)
+                settings = pytest_settings(path)
                 if settings is None:
                     continue
                 return cls(
@@ -105,7 +108,7 @@ def _upward(root: Path, top: Path) -> list[Path]:
     return folders
 
 
-def _settings(path: Path) -> dict[str, object] | None:
+def pytest_settings(path: Path) -> dict[str, object] | None:
     """The pytest settings `path` holds, or None where pytest would pass the file over."""
     try:
         if path.name in _TOML_FILES:
@@ -121,6 +124,8 @@ def _settings(path: Path) -> dict[str, object] | None:
             native = {key: value for key, value in pytest.items() if key != "ini_options"}
             return native or (table if isinstance(table, dict) else None)
         parser = configparser.RawConfigParser(strict=False)
+        # pytest reads a name as it is written (`iniconfig`): `DJANGO_SETTINGS_MODULE`.
+        parser.optionxform = str  # type: ignore[assignment,method-assign]
         parser.read(path, encoding="utf-8")
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, configparser.Error):
         return None
