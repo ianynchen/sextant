@@ -274,6 +274,23 @@ class ProjectHeaders:
                 return found
         return None
 
+    def star_giver(self, module: str, name: str) -> str | None:
+        """The module whose own statements bind the `name` that `module` takes by a star
+        alone: the last star that takes it (`_starred`'s rule). None where that source takes
+        the name by a star of its own, or no read star gives it."""
+        header = self.header(module)
+        for base in reversed(header.stars if header is not None else ()):
+            source = self.header(base)
+            if source is None:
+                continue
+            if name not in source.exports if source.exports is not None else name.startswith("_"):
+                continue
+            if name in source.names:
+                return base
+            if name in self.starred_names(base):
+                return None
+        return None
+
     def starred_names(self, module: str, seen: frozenset[str] = frozenset()) -> tuple[str, ...]:
         """The names `module` binds by a `from m import *` the header reads and by no
         statement of its own, sorted: each name a source binds or takes by a star of its own,
