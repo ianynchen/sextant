@@ -114,7 +114,7 @@ Elides: Reachability, not execution: an arrow is a call the compiler recorded, n
 
 - An @HttpExchange interface implemented server-side is still reported outbound.
 - Base addresses built by computation — concatenation, setter injection, a method's return value — are not traced; only a directly-read field or property reaches configuration.
-- Configuration constructed in code — a settings module, a config factory — is not read; only configuration files reach resolution.
+- Configuration constructed in code is read only in a form a catalog states — a settings module, a settings class; a config factory or any other form is not read.
 - A trace is reachability, never execution: branches are not distinguished, two return statements are two possible answers rather than the one that runs, and no step is asserted to have happened.
 - The structure diagram covers contract types only: inheritance edges are not extracted.
 - A trace stops where this workspace read no body, and `Stop` says `boundary` whether that body is a third-party library, the JDK, a data-access API or a SIBLING BUILD MODULE. `Reaches` classifies the ones a catalog knows, so a data-access call is no longer indistinguishable from a JDK one — but the SIBLING MODULE is the case that under-reports and it is not separated: a body exists somewhere, in a workspace this one does not hold, and on a multi-module build it is where a response is composed.

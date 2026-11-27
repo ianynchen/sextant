@@ -774,7 +774,10 @@ def test_the_base_address_gap_retires_into_the_two_boundaries_that_remain():
     no reader at all. Eleven becomes twelve because one key retires and two
     arrive, each with its own sentence in the same position."""
     assert "client_base_addresses_not_resolved" not in KNOWN_GAPS
-    assert KNOWN_GAPS[1:3] == ["computed_base_addresses_not_traced", "config_as_code_not_read"]
+    assert KNOWN_GAPS[1:3] == [
+        "computed_base_addresses_not_traced",
+        "config_in_code_read_only_where_a_catalog_states_it",
+    ]
     assert _GAPS[1].startswith("Base addresses built by computation")
     assert _GAPS[2].startswith("Configuration constructed in code")
     assert not any("configured in builder code" in gap for gap in _GAPS)
@@ -1924,6 +1927,14 @@ def test_a_declared_set_states_the_declared_set_gap(tmp_path: Path):
     assert metadata["gaps"] == KNOWN_GAPS
     text = render_module_document(MODULE, REPORT, "a3f91c")
     assert "Maven profiles and transitive dependencies are not resolved" in text
+
+
+def test_the_config_in_code_gap_does_not_say_a_settings_module_is_not_read():
+    """A document with a settings module's rows said "a settings module ... is not read"
+    (measured on healthchecks, 2026-11-27)."""
+    text = render_module_document(MODULE, REPORT, "a3f91c")
+    assert "a settings module, a settings class; a config factory" in text
+    assert "is not read; only configuration files reach resolution" not in text
 
 
 def test_an_actor_row_renders_verbless():

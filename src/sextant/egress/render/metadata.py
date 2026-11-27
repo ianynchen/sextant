@@ -26,7 +26,10 @@ from sextant.domain.version import (
 KNOWN_GAPS = [
     "http_exchange_inbound_use_not_detected",
     "computed_base_addresses_not_traced",
-    "config_as_code_not_read",
+    # *Renamed 2026-11-27 (spec ruling I3: a gap that NARROWS gets a narrower name).* A
+    # settings module and a settings class a catalog states are read (config-model
+    # `sources`), so "is not read" was false in a document that holds their rows.
+    "config_in_code_read_only_where_a_catalog_states_it",
     # *Two gaps retired BY NAME here (spec ruling I3), and five narrower ones
     # took their place.* `sequence_diagrams_pending_call_graph` and
     # `call_graph_not_implemented` both said the call graph does not exist;

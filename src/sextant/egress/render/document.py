@@ -101,8 +101,8 @@ _GAPS = [
         "property reaches configuration."
     ),
     (
-        "Configuration constructed in code — a settings module, a config "
-        "factory — is not read; only configuration files reach resolution."
+        "Configuration constructed in code is read only in a form a catalog states — a "
+        "settings module, a settings class; a config factory or any other form is not read."
     ),
     (
         "A trace is reachability, never execution: branches are not distinguished, "
