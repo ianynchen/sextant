@@ -338,6 +338,8 @@ _ELEMENT_OF = "element-of"
 # conflict (`Path.written_under`). `_GUARDS` is the key the index keeps those tests under, on
 # the written entry.
 _WRITTEN_UNDER = "written-under"
+# The label of such a step for a write, by which `Path.writes_under` tells it from a return.
+_A_WRITE = " written under a test"
 _GUARDS = "guards"
 # What a test read, as the origin of that read (`_Walk._decided`): no place in control flow,
 # so the `escapes` window of the value is the rest of the testing method.
@@ -2786,6 +2788,16 @@ class Path:
             if step.context[0] == _WRITTEN_UNDER
         )
 
+    def writes_under(self) -> tuple[tuple[str, str], ...]:
+        """`written_under`, the writes alone: a `return` under a test inside a helper changes
+        the value a name is written with, never whether the name is written (the reader of a
+        configuration row's existence, ruled 2026-11-27)."""
+        return tuple(
+            (str(step.context[1]), str(step.context[2]))
+            for step in self.trail
+            if step.context[0] == _WRITTEN_UNDER and step.label.endswith(_A_WRITE)
+        )
+
     def entered_twice(self) -> frozenset[str]:
         """The callees this path descended into the return of on two calls (`log(log(v))`).
         `_entered` holds the first call of each (OI-537), so a value read through one of them
@@ -3471,7 +3483,7 @@ def _under(trail: _Trail, symbol: str, writer: str | None, entry: Mapping[str, A
     guards = entry.get(_GUARDS)
     if guards is None or writer is None:
         return trail
-    step = _Step((_WRITTEN_UNDER, writer, str(guards)), f"{symbol} written under a test")
+    step = _Step((_WRITTEN_UNDER, writer, str(guards)), f"{symbol}{_A_WRITE}")
     return trail if step in trail else (*trail, step)
 
 

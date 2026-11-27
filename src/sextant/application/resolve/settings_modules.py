@@ -150,8 +150,9 @@ def record_module_config(workspace: Workspace, catalogs: Sequence[Catalog]) -> N
                 stated[key] = _with_default(key, stated[key], reached, workspace, index)
             for name, (value, reason, detail) in stated.items():
                 rows.append(_row(name, environment, value, paths.get(document), reason, detail))
-            if list(stated) == [key] and stated[key][0] is not None:
-                existence += _existence(key, environment, [path for path, _ in reached], conditions)
+            # Every key of the name, read or not: its writes run under the same tests.
+            under = _existence(environment, [path for path, _ in reached], conditions)
+            existence += [{"key": name, **entry} for name in stated for entry in under]
     workspace.derive("resolved_config_insert", rows=rows)
     if existence:
         workspace.derive("config_existence_insert", rows=existence)
@@ -236,20 +237,25 @@ def _settings_named(catalogs: Sequence[Catalog]) -> set[str]:
 
 
 def _existence(
-    key: str, environment: str, paths: Sequence[Path], conditions: Conditions
+    environment: str, paths: Sequence[Path], conditions: Conditions
 ) -> list[dict[str, object]]:
-    """The `config_existence` rows of one key with one value: where the writes its paths read
-    the value through run (`Path.written_under`), OR-ed across the paths, as a registered
-    row's are (`existence_rows`). Nothing where one path read it under no test. A test of
-    the code: not evaluated."""
+    """The `config_existence` entries of one name, for each of its keys: where the writes its
+    paths read the value through run, OR-ed across the paths, as a registered row's are
+    (`existence_rows`). The writes alone (`Path.writes_under`): a `return` under a test in a
+    helper changes the value, not whether the key is written. Nothing where one path read
+    it under no test. A test of the code: not evaluated."""
     found: set[Conjunction] = set()
     for path in paths:
-        found |= conditions.of_sites(path.written_under(), path.calls_into(), on=path)
+        found |= conditions.of_sites(path.writes_under(), path.calls_into(), on=path)
     if not found or () in found or frozenset(found) == UNCONDITIONAL:
+        return []
+    # Written in both arms of one test (`if T: K = a` / `else: K = b`): always written.
+    if any(
+        len(one) == 1 and ((*one[0][:2], not one[0][2], *one[0][3:]),) in found for one in found
+    ):
         return []
     return [
         {
-            "key": key,
             "environment": environment,
             "route": route,
             "position": position,
@@ -283,7 +289,9 @@ def _keys(key: str, reached: Sequence[tuple[Path, Answer]], spread: bool) -> dic
         detail = f"{key} adds to a list this module does not write: its members were not read"
         return {key: (None, NOT_READABLE, detail)}
     members = [path.members() for path, _ in reached]
-    if not all(members) or any(path.written_under() for path, _ in reached):
+    # One list written under a test (`if T: K = ['a']`) is one membership, under that test
+    # (`config_existence`); a list one write under a test changes has none.
+    if not all(members) or len({path.written_under() for path, _ in reached}) > 1:
         return {key: _stated(key, [answer for _, answer in reached])}
     by_member: dict[str, list[Answer]] = {}
     unread: Answer | None = None

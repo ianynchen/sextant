@@ -198,10 +198,21 @@ def test_a_setting_written_only_under_a_test_states_the_test(tmp_path: Path, lib
                 "import os\n"
                 "ROOT_URLCONF = 'app.urls'\n"
                 "USE_S3 = os.environ.get('USE_S3')\n"
+                "def secret(name):\n"
+                "    if os.environ.get(name + '_FILE'):\n"
+                "        return 'from-file'\n"
+                "    return 'plain'\n"
+                "TOKEN = secret('TOKEN')\n"
                 "ON = True\n"
                 "PLAIN = 'p'\n"
                 "if USE_S3:\n"
+                "    MODE = 's3'\n"
+                "else:\n"
+                "    MODE = 'local'\n"
+                "if USE_S3:\n"
                 "    BUCKET = 'b'\n"
+                "    SCOPE = ['user:email']\n"
+                "    PARAMS = dict(a=1)\n"
                 "if ON:\n"
                 "    FIXED = 'f'\n"
             ),
@@ -212,10 +223,23 @@ def test_a_setting_written_only_under_a_test_states_the_test(tmp_path: Path, lib
     config = _config(workspace)
     assert config[("app.settings", "BUCKET")] == ("b", None)
     assert config[("app.settings", "FIXED")] == ("f", None)
+    # Written in both arms of one test: always written, no condition.
+    assert ("app.settings", "MODE") in config
+    # A test inside a helper changes the value, never whether the key is written
+    # (healthchecks `envsecret`): no condition.
+    assert ("app.settings", "TOKEN") in config
+    # A one-member list under the test keeps its list form (weblate
+    # `SOCIAL_AUTH_GITHUB_SCOPE`), and a key whose value is not read states the test too.
+    assert config[("app.settings", "SCOPE[0]")] == ("user:email", None)
+    assert ("app.settings", "SCOPE") not in config
+    assert config[("app.settings", "PARAMS")][0] is None
+    under = [
+        ("USE_S3", True, "unresolved", "a condition this analysis does not evaluate: `USE_S3`")
+    ]
     assert _conditions(workspace) == {
-        ("app.settings", "BUCKET"): [
-            ("USE_S3", True, "unresolved", "a condition this analysis does not evaluate: `USE_S3`")
-        ]
+        ("app.settings", "BUCKET"): under,
+        ("app.settings", "SCOPE[0]"): under,
+        ("app.settings", "PARAMS"): under,
     }
 
 
