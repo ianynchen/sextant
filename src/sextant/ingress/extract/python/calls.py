@@ -1043,6 +1043,11 @@ class BodyReader:
         here = self._context.here
         for name in headers.starred_names(here):
             targets = headers.member(here, name) or ()
+            if len(targets) > 1 and all(self._a_variable((one,)) for one in targets):
+                # The source binds the name on several statements (an import of it, then
+                # a write under a test): its own name holds every one of them.
+                giver = headers.star_giver(here, name)
+                targets = (Target(giver, name),) if giver is not None else targets
             if not self._a_variable(targets):
                 continue
             descriptor = f"{scope.owner}{name}."
