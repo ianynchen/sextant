@@ -124,7 +124,7 @@ _PIPELINE_FILES = (
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     # CI runs the suite as parallel jobs (`SEXTANT_TEST_SHARD=2/3`, .github/workflows/pr.yml):
     # the files in name order, dealt in turn, so each file runs in exactly one job.
-    shard = os.environ.get("SEXTANT_TEST_SHARD")
+    shard = os.environ.pop("SEXTANT_TEST_SHARD", None)  # not for a pytest that a test starts
     if shard:
         index, count = (int(part) for part in shard.split("/"))
         files = sorted({i.path for i in items})
