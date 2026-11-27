@@ -1723,7 +1723,7 @@ def assemble_module_document(
     ]
     coverage_items += _type_header_items(report.coverage, module)
     coverage_items += _understanding_items(report.coverage)
-    coverage_items += _config_coverage_items(resolved_config, redactor)
+    coverage_items += _config_coverage_items(resolved_config, redactor, report.config_existence)
     coverage_items += _unresolved_derivation_items(report.endpoints)
     # Per-environment peer AUTHORITIES — one substituted address per
     # environment for a resolved outbound row — are the system-scope
@@ -3329,6 +3329,7 @@ def _understanding_items(coverage: dict[str, object]) -> list[tuple[Run, ...]]:
 def _config_coverage_items(
     resolved_config: Sequence[dict[str, object]],
     redactor: Redactor,
+    config_existence: Sequence[dict[str, object]] = (),
 ) -> list[tuple[Run, ...]]:
     """Coverage's own view of pass 2 (2F design §2): which profiles resolved,
     and which declared keys did not — named with their reason and
@@ -3342,6 +3343,33 @@ def _config_coverage_items(
         items = [_runs(f"Environments resolved: {rendered}.")]
     else:
         items = [_runs("Environments resolved: none.")]
+    # A value with a part not read, and a key written only under a test the analysis does
+    # not decide (ruled 2026-11-27): named, as an unresolved key is.
+    for row in resolved_config:
+        if row.get("value") is not None and row.get("unresolved_reason") is not None:
+            items.append(
+                _runs(
+                    f"Configuration key partial: {row['key']} — "
+                    f"{row['unresolved_reason']}: "
+                    f"{redactor.redact_text(str(row['unresolved_detail']))} "
+                    f"(in {row['environment']})."
+                )
+            )
+    tests: dict[tuple[str, str], dict[int, list[str]]] = {}
+    for entry in config_existence:
+        test = json.loads(str(entry["expression"]))
+        said = f"`{test['test']}`" if test["holds"] else f"not `{test['test']}`"
+        tests.setdefault((str(entry["environment"]), str(entry["key"])), {}).setdefault(
+            int(str(entry["route"])), []
+        ).append(redactor.redact_text(said))
+    for (environment, key), routes in tests.items():
+        when = " or ".join(" and ".join(said) for said in routes.values())
+        items.append(
+            _runs(
+                f"Configuration key set only under a test: {key} — when {when}, "
+                f"not evaluated (in {environment})."
+            )
+        )
     unresolved = [row for row in resolved_config if row.get("value") is None]
     if not unresolved:
         items.append(_runs("Configuration keys unresolved: none."))

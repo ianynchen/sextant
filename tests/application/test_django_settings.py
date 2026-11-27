@@ -175,6 +175,112 @@ def test_a_settings_module_holds_what_a_star_import_gives_it(tmp_path: Path, lib
 _START = "import os\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', '{}')\n"
 
 
+def _conditions(workspace) -> dict[tuple[str, str], list[tuple[object, ...]]]:
+    found: dict[tuple[str, str], list[tuple[object, ...]]] = {}
+    for row in workspace.query("config_existence"):
+        expression = json.loads(str(row["expression"]))
+        found.setdefault((str(row["environment"]), str(row["key"])), []).append(
+            (expression["test"], expression["holds"], row["holds"], row["evidence"])
+        )
+    return found
+
+
+def test_a_setting_written_only_under_a_test_states_the_test(tmp_path: Path, libraries):
+    """bookwyrm: `if USE_S3: AWS_ACCESS_KEY_ID = env("AWS_ACCESS_KEY_ID")`. The row keeps its
+    value and exists where the test goes its way, not evaluated (ruled 2026-11-27; measured:
+    bookwyrm 17 keys, weblate 6, healthchecks 1 stated with no condition). A test on a value
+    the code fixes is decided: true gives no condition, false gives no value."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": (
+                "import os\n"
+                "ROOT_URLCONF = 'app.urls'\n"
+                "USE_S3 = os.environ.get('USE_S3')\n"
+                "ON = True\n"
+                "PLAIN = 'p'\n"
+                "if USE_S3:\n"
+                "    BUCKET = 'b'\n"
+                "if ON:\n"
+                "    FIXED = 'f'\n"
+            ),
+            "urls.py": _URLS,
+        },
+    )
+
+    config = _config(workspace)
+    assert config[("app.settings", "BUCKET")] == ("b", None)
+    assert config[("app.settings", "FIXED")] == ("f", None)
+    assert _conditions(workspace) == {
+        ("app.settings", "BUCKET"): [
+            ("USE_S3", True, "unresolved", "a condition this analysis does not evaluate: `USE_S3`")
+        ]
+    }
+
+
+def test_a_default_that_is_no_literal_is_stated_with_the_key(tmp_path: Path, libraries):
+    """bookwyrm: `env.list("ALLOWED_HOSTS", ["*"])` read `${ALLOWED_HOSTS}`, a key the
+    deployment must set (ruled 2026-11-27; measured: bookwyrm 20 reads, healthchecks 3).
+    `None` and a written list are said as written, another read nests, and a default not
+    read is the hole `<default>` on a `partial` row."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": (
+                "import os\n"
+                "ROOT_URLCONF = 'app.urls'\n"
+                "def compute():\n    return object()\n"
+                "SECRET = os.environ.get('SECRET', None)\n"
+                "HOSTS = os.environ.get('HOSTS', ['*'])\n"
+                "AGE = os.environ.get('AGE', os.environ.get('MAX_AGE', '5'))\n"
+                "ODD = os.environ.get('ODD', compute())\n"
+                "PLAIN = os.environ.get('PLAIN', 'p')\n"
+                "NEEDED = os.environ.get('NEEDED')\n"
+            ),
+            "urls.py": _URLS,
+        },
+    )
+
+    rows = {
+        str(row["key"]): (row["value"], row["unresolved_reason"], row["resolution"])
+        for row in workspace.query("resolved_config")
+    }
+    assert rows["SECRET"] == ("${SECRET:-None}", None, "resolved")
+    assert rows["HOSTS"] == ('${HOSTS:-["*"]}', None, "resolved")
+    assert rows["AGE"] == ("${AGE:-${MAX_AGE:-5}}", None, "resolved")
+    assert rows["ODD"] == ("${ODD:-<default>}", "not_readable", "partial")
+    assert rows["PLAIN"] == ("${PLAIN:-p}", None, "resolved")
+    assert rows["NEEDED"] == ("${NEEDED}", None, "resolved")
+
+
+def test_a_value_with_a_part_not_read_is_partial_and_names_the_hole(tmp_path: Path, libraries):
+    """healthchecks: `LOGIN_URL = f"{_site_root_parts.path}/accounts/login/"` was stated as
+    `{}/accounts/login/` with no reason (ruled 2026-11-27; measured: weblate 10, healthchecks
+    2, zulip 1). The row is `partial`: the text with the hole named, and the reason."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": (
+                "from urllib.parse import urlparse\n"
+                "ROOT_URLCONF = 'app.urls'\n"
+                "_parts = urlparse('http://x/y')\n"
+                "LOGIN_URL = f'{_parts.path}/accounts/login/'\n"
+            ),
+            "urls.py": _URLS,
+        },
+    )
+
+    rows = {
+        str(row["key"]): (row["value"], row["unresolved_reason"], row["resolution"])
+        for row in workspace.query("resolved_config")
+    }
+    assert rows["LOGIN_URL"] == ("<not read>/accounts/login/", "not_readable", "partial")
+    assert rows["ROOT_URLCONF"] == ("app.urls", None, "resolved")
+
+
 def test_a_settings_module_another_builds_on_is_no_environment(tmp_path: Path, libraries):
     """A settings module another settings module builds on is a building block and no
     environment, unless code starts a process with it (ruled 2026-11-26, D3; zulip's

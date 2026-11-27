@@ -22,6 +22,7 @@ name a setting some module holds: one pass over `field_writes`, and one walk per
 (measured 2026-11-25: zulip 608 names, 893 computes, 0.01 s; weblate 620 names, 1,274
 computes, 0.02 s), on the index the engines share."""
 
+import json
 from collections.abc import Mapping, Sequence
 
 from sextant.application.ports.catalogs import Catalog
@@ -32,6 +33,14 @@ from sextant.application.resolve.config import (
     TEST_TOOL_LANGUAGE,
     config_model_of,
     not_set,
+)
+from sextant.application.resolve.registration_conditions import (
+    NOT_EVALUATED,
+    TEST,
+    UNCONDITIONAL,
+    Conditions,
+    Conjunction,
+    conditions_of,
 )
 from sextant.application.resolve.values import (
     ABSENT,
@@ -44,6 +53,7 @@ from sextant.application.resolve.values import (
     UNRESOLVED,
     Answer,
     Path,
+    Tests,
     ValueIndex,
     argument_slot,
     cached_value_index,
@@ -103,7 +113,11 @@ def record_module_config(workspace: Workspace, catalogs: Sequence[Catalog]) -> N
     keys = sorted(
         {name for module in modules for name in held[module] if name.isupper() or not upper}
     )
+    # The tests the module's writes run under, read once (`conditions_of`): a value read
+    # through a write under a test not decided exists where that test goes its way.
+    conditions = conditions_of(workspace, Tests(index))
     rows: list[dict[str, object]] = []
+    existence: list[dict[str, object]] = []
     for module in modules:
         environment = dotted_type(module)
         for key in keys:
@@ -131,9 +145,16 @@ def record_module_config(workspace: Workspace, catalogs: Sequence[Catalog]) -> N
                 any(e.get("keyword") and e.get("symbol") == symbol for e in elements)
                 for elements in lists
             )
-            for name, (value, reason, detail) in _keys(key, reached, spread).items():
+            stated = _keys(key, reached, spread)
+            if list(stated) == [key] and stated[key][1] is None:
+                stated[key] = _with_default(key, stated[key], reached, workspace, index)
+            for name, (value, reason, detail) in stated.items():
                 rows.append(_row(name, environment, value, paths.get(document), reason, detail))
+            if list(stated) == [key] and stated[key][0] is not None:
+                existence += _existence(key, environment, [path for path, _ in reached], conditions)
     workspace.derive("resolved_config_insert", rows=rows)
+    if existence:
+        workspace.derive("config_existence_insert", rows=existence)
 
 
 def _environments(
@@ -214,6 +235,41 @@ def _settings_named(catalogs: Sequence[Catalog]) -> set[str]:
     }
 
 
+def _existence(
+    key: str, environment: str, paths: Sequence[Path], conditions: Conditions
+) -> list[dict[str, object]]:
+    """The `config_existence` rows of one key with one value: where the writes its paths read
+    the value through run (`Path.written_under`), OR-ed across the paths, as a registered
+    row's are (`existence_rows`). Nothing where one path read it under no test. A test of
+    the code: not evaluated."""
+    found: set[Conjunction] = set()
+    for path in paths:
+        found |= conditions.of_sites(path.written_under(), path.calls_into(), on=path)
+    if not found or () in found or frozenset(found) == UNCONDITIONAL:
+        return []
+    return [
+        {
+            "key": key,
+            "environment": environment,
+            "route": route,
+            "position": position,
+            "via": guard[0],
+            "kind": TEST,
+            "expression": json.dumps(
+                {"holds": guard[2], "reads": list(guard[3]), "test": guard[1]}, sort_keys=True
+            ),
+            "holds": "unresolved",
+            "resolution": "unresolved",
+            "evidence": f"{NOT_EVALUATED}`{guard[1]}`",
+        }
+        for route, conjunction in enumerate(sorted(found))
+        for position, guard in enumerate(conjunction)
+    ]
+
+
+# The hole the walk leaves in a text where a part was not read, and its name in a row.
+_HOLE = "{}"
+_NOT_READ = "<not read>"
 _Stated = tuple[str | None, str | None, str | None]
 
 
@@ -264,7 +320,62 @@ def _stated(key: str, answers: Sequence[Answer]) -> _Stated:
         return None, NOT_READABLE, f"the value written to {key} is not one written text"
     if answer.kind not in (LITERAL, EXPRESSION):
         return None, NOT_READABLE, f"the value written to {key} was not read"
+    if answer.kind == EXPRESSION and _HOLE in str(answer.value):
+        # A `partial` row: the text the code states, the part not read named.
+        detail = f"a part of the value written to {key} was not read"
+        return str(answer.value).replace(_HOLE, _NOT_READ), NOT_READABLE, detail
     return str(answer.value), None, None
+
+
+# The default of an environment read the walk did not read, named in the row.
+_DEFAULT = "<default>"
+
+
+def _with_default(
+    key: str,
+    stated: _Stated,
+    reached: Sequence[tuple[Path, Answer]],
+    workspace: Workspace,
+    index: ValueIndex,
+) -> _Stated:
+    """`stated`, the one value of `key`, with the default of the environment read it is where
+    the expression does not state one (`Answer.default_at`; ruled 2026-11-27: the row read
+    `${KEY}`, as a key the deployment must set). `None` and a written list of literals are
+    said as written; any other default is read by the walk (another read nests,
+    `${A:-${B:-5}}`); one not read is the hole `<default>` on a `partial` row."""
+    at = reached[0][1].default_at
+    marks = index.placeholders
+    value = str(stated[0])
+    if at is None or marks is None or not value.endswith(marks["close"]):
+        return stated
+    site = index.sites.get((at[0], at[1]))
+    written = None if site is None else (site["arguments"] or [])[at[2]]
+    text: str | None = None
+    if written is not None and written.get("kind") == "null":
+        text = "None"
+    elif written is not None and written.get("kind") == "array":
+        elements = written.get("elements") or []
+        if all(e.get("kind") in ("string", "int", "long", "boolean") for e in elements):
+            text = json.dumps([e.get("value") for e in elements])
+    elif site is not None:
+        answers = list(
+            dict.fromkeys(
+                found[key]
+                for _, found in resolve_positions_on_paths(workspace, {key: (site, at[2])}, index)
+            )
+        )
+        if len(answers) == 1:
+            read = _stated(key, answers)
+            text = read[0] if read[1] is None else "None" if answers[0].kind == ABSENT else None
+            if text == value:
+                # `K = read("K", K)`: the default is what the name held before, and the
+                # walk reads the name as this write. Not read.
+                text = None
+    close = marks["close"]
+    joined = value[: -len(close)] + marks["default_separator"] + (text or _DEFAULT) + close
+    if text is not None:
+        return joined, None, None
+    return joined, NOT_READABLE, f"the default of {key} was not read"
 
 
 def _row(

@@ -880,6 +880,41 @@ def test_coverage_section_names_environments_and_the_unresolved_key_with_its_rea
     assert "billing.url" not in text.split("## Coverage", 1)[1].split("## Structure", 1)[0]
 
 
+def test_coverage_names_a_partial_key_and_a_key_set_only_under_a_test():
+    """Ruled 2026-11-27: a value with a part not read, and a key whose one write runs under
+    a test not decided, are named as an unresolved key is."""
+    resolved_config = [
+        {
+            "key": "LOGIN_URL",
+            "value": "<not read>/login/",
+            "environment": "app.settings",
+            "unresolved_reason": "not_readable",
+            "unresolved_detail": "a part of the value written to LOGIN_URL was not read",
+        },
+        {"key": "BUCKET", "value": "b", "environment": "app.settings", "unresolved_reason": None},
+    ]
+    existence = [
+        {
+            "key": "BUCKET",
+            "environment": "app.settings",
+            "route": 0,
+            "position": 0,
+            "expression": json.dumps({"holds": True, "reads": ["USE_S3"], "test": "USE_S3"}),
+        }
+    ]
+    report = replace(REPORT, config_existence=existence)
+    text = render_module_document(MODULE, report, "a3f91c", resolved_config=resolved_config)
+    assert (
+        "Configuration key partial: LOGIN_URL — not_readable: a part of the value written to "
+        "LOGIN_URL was not read (in app.settings)." in text
+    )
+    assert (
+        "Configuration key set only under a test: BUCKET — when `USE_S3`, not evaluated "
+        "(in app.settings)." in text
+    )
+    assert "Configuration keys unresolved: none." in text
+
+
 def test_coverage_section_is_honest_about_no_environments_and_no_unresolved_keys():
     text = render_module_document(MODULE, REPORT, "a3f91c")
     assert "Environments resolved: none." in text

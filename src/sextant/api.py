@@ -1361,6 +1361,7 @@ def _reconstructed_report(
         symbol_beans=workspace.query("symbol_beans"),
         candidate_presence=workspace.query("candidate_presence"),
         endpoint_existence=workspace.query("endpoint_existence"),
+        config_existence=workspace.query("config_existence"),
         unexpanded_types=tuple(metadata.get("shapes", {}).get("unexpanded_types", [])),
     )
     return reconstructed, report

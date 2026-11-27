@@ -568,6 +568,14 @@ class Answer:
     # producer reader to hand on (`Producer.made_by`), so a reader can name the decorator a
     # walk stopped at. Outside equality, as `parameter` is.
     made_by: tuple[str, int] | None = dataclass_field(default=None, compare=False, repr=False)
+    # **Where an environment read's default is written, `(method, ordinal, argument)`, when
+    # the expression does not state it** (it is no literal: `None`, a list, another read) —
+    # set only by `_Walk._environment_key`, for the reader of a configuration row to state
+    # the default itself (ruled 2026-11-27). The expression stays the key alone: an address
+    # resolved from it must never take such a default for a text. Outside equality.
+    default_at: tuple[str, int, int] | None = dataclass_field(
+        default=None, compare=False, repr=False
+    )
     # **The value IS the class (or module) the symbol names, not an object built from it**
     # (ruling R37): set on a `class` reference and on a name read as the type it is
     # (`_named_type`). A `symbol` answer is both "the class" and "the type a value was built
@@ -6181,6 +6189,9 @@ class _Walk:
                 Answer(
                     kind=EXPRESSION,
                     value="${" + str(answer.value) + rendered + "}",
+                    default_at=None
+                    if written is None or default is not None or given is None
+                    else (site[0], site[1], given),
                 )
                 if answer.kind == LITERAL and answer.literal_kind == STRING
                 else _unresolved(NON_ENUMERABLE),
