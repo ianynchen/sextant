@@ -59,7 +59,8 @@ here would restate those documents rather than add anything.
   `<host>`. healthchecks: `/<prefix>admin/` and `/<prefix>admin/login/` are new, and the two
   rows without the prefix state their condition. petclinic-api-gateway: `hostname +
   "pets/visits…"` has a second outbound row, host not read, for the value `setHostname`
-  gives.
+  gives. bookwyrm: 4 pattern rows read `<prefix>(\\.json)?/?$`
+  where they read `<host>…`.
 - **A value written with no test, then again under a test, is read with the opposite test**
   (ruled 2026-11-27). `prefix = ''`, then `if T: prefix = p`: the two values exclude each
   other, and only the second had a condition. The value of the plain write now carries
