@@ -339,6 +339,48 @@ def test_a_mount_written_under_a_test_gives_its_routes_the_condition(tmp_path, l
     assert _conditions(workspace) == [("/legal/terms/", "settings.LEGAL", "unresolved")]
 
 
+def test_a_plain_write_a_write_under_a_test_replaces_takes_the_opposite_test(tmp_path, libraries):
+    """healthchecks `hc/urls.py`: `prefix = ""`, then `if _path: prefix = f"{_path}/"`. The
+    routes read through the plain write are served only where the test is false: 179 rows
+    said so of nothing, beside 177 twins "not evaluated" (ruled 2026-11-27, option A). The
+    plain write is taken to come first. An addition to the name under a test (`x += [...]`)
+    replaces nothing: it holds what the name had."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            "sub_urls.py": "urlpatterns = [path('a/', v)]\n",
+            "settings.py": "import os\nROOT_URLCONF = 'app.urls'\n"
+            "SITE_ROOT = os.environ.get('SITE_ROOT', '')\n",
+            "urls.py": "from urllib.parse import urlparse\n"
+            "from django.conf import settings\n"
+            "import os\n"
+            "prefix = ''\n"
+            "if _path := urlparse(settings.SITE_ROOT).path.lstrip('/'):\n"
+            "    prefix = f'{_path}/'\n"
+            "urlpatterns = [path(prefix, include('app.sub_urls'))]\n"
+            "if os.environ.get('MORE'):\n"
+            "    urlpatterns += [path('m/', v)]\n",
+        },
+    )
+
+    assert _rows(workspace) == [_row("/<prefix>a/", "partial"), _row("/a/"), _row("/m/")]
+    found = sorted(
+        (
+            row["path"],
+            json.loads(str(row["expression"]))["test"],
+            json.loads(str(row["expression"]))["holds"],
+        )
+        for row in workspace.query("endpoint_existence")
+        if row["kind"] == "test"
+    )
+    assert found == [
+        ("/<prefix>a/", "(_path := urlparse(settings.SITE_ROOT).path.lstrip('/'))", True),
+        ("/a/", "(_path := urlparse(settings.SITE_ROOT).path.lstrip('/'))", False),
+        ("/m/", "os.environ.get('MORE')", True),
+    ]
+
+
 # -- design 2026-11-23 §4a: the roots --------------------------------------------------------------
 
 
