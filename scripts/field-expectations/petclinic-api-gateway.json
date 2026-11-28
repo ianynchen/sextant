@@ -8,7 +8,7 @@
       "http": 36
     },
     "outbound": {
-      "http": 6
+      "http": 7
     }
   },
   "routes": {
@@ -56,7 +56,8 @@
       "(unresolved) lb://vets-service",
       "(unresolved) lb://visits-service",
       "GET /owners/{ownerId}",
-      "GET /pets/visits"
+      "GET /pets/visits",
+      "GET <host>pets/visits"
     ]
   }
 }

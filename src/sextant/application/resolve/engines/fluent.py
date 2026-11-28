@@ -131,6 +131,7 @@ from sextant.application.resolve.shapes.inbound_routes import (
     INVALID_RESPONSE_TYPE,
     NO_METHODS,
     SINGLE_SLASH,
+    UNREAD_PREFIX,
     UNROOTED_PATH,
     WORDS,
     fallback_word,
@@ -1422,6 +1423,7 @@ def _derive_captured(
     # The writes under a test each walked verb was read through (`Path.written_under`), one
     # entry per path that read it: the verb's rows are served where those tests hold.
     verb_writes: dict[Any, tuple[tuple[tuple[str, str], ...], ...]] = {}
+    url_writes: dict[Any, tuple[tuple[tuple[str, str], ...], ...]] = {}
     if _unread_verbs(declared_verb):
         declared_verb, verb_writes = _walked_verbs(declared_verb, context)
     # Several verbs accumulated on one chain (`repeats`) are one row each (Vert.x spec §3f:
@@ -1548,15 +1550,22 @@ def _derive_captured(
     else:
         # One per url argument, and per path the client's defaults are read on (rule 4): a
         # destination two paths give alike is one.
-        destinations = list(
-            dict.fromkeys(
-                destination
-                for url_argument in (
-                    _url_arguments(captures, context) if "url" in captures else [None]
-                )
-                for destination in _composed_address(captures, context, url_argument)
-            )
-        )
+        url_arguments = _url_arguments(captures, context) if "url" in captures else [None]
+        # An address read as one of several (a joined text over a name with two writes) is
+        # served where the write it was read through runs (`Path.written_under`), as a verb.
+        written = _url_writes(captures, context) if len(url_arguments) > 1 else {}
+        destinations = []
+        for url_argument in url_arguments:
+            for peer, path, resolution in _composed_address(captures, context, url_argument):
+                # A leading piece of a served path that was not read is no host: it is the
+                # hole of a prefix not read (ruled 2026-11-28).
+                if direction == "inbound" and path and path.startswith(_UNREADABLE_HOST):
+                    path = UNREAD_PREFIX + path.removeprefix(_UNREADABLE_HOST)
+                destinations.append((peer, path, resolution))
+                under = written.get(str((url_argument or {}).get("value")))
+                if under:
+                    url_writes[destinations[-1]] = under
+        destinations = list(dict.fromkeys(destinations))
     # A route expression's destinations are the paths its reads give (`url_is: expression`).
     expression_kinds: dict[tuple[str | None, str | None, str], str] = {}
     if captures.get("url_is") == URL_IS_EXPRESSION:
@@ -1660,7 +1669,13 @@ def _derive_captured(
         # An address nobody read takes no prefix: one row for it, not one per prefix.
         if path is None and prefix is not prefixes[0]:
             continue
-        under = verb_writes.get(verb, ((),))
+        under = tuple(
+            dict.fromkeys(
+                (*one, *other)
+                for one in verb_writes.get(verb, ((),))
+                for other in url_writes.get((peer, path, url_resolution), ((),))
+            )
+        )
         if (id(prefix), under) not in existing:
             existing[(id(prefix), under)] = _existence(end, prefix, direction, context, under)
         alternatives = existing[(id(prefix), under)]
@@ -3722,12 +3737,12 @@ def _url_arguments(
         # **Every caller's value is part of the set** (final review I2, enumerable is exact):
         # a parameter handed `"/a"` by one caller and a value nobody reads by another is two
         # addresses, `"/a"` at `resolved` and one whose path is unread. Taking the literal
-        # alone would publish it as the whole answer. The concat arm keeps one address.
-        if assembled is not None and argument.get("kind") == _PARAMETER:
+        # alone would publish it as the whole answer. A joined text over a name with two
+        # writes is the same set (ruled 2026-11-28, OI-499).
+        if assembled is not None:
             several = _each_callers_url(assembled, argument)
             if several is not None:
                 return several
-        if assembled is not None:
             address = _one_assembled(assembled)
             # **Several branch literals are several rows, and this engine carries ONE**
             # (`OI-134`). The walk may never take an answer away: before ruling 7 a branch
@@ -3772,6 +3787,31 @@ def _url_arguments(
     if len(resolved) != 1:
         return [argument]
     return [{"kind": "string", "value": resolved[0]}]
+
+
+def _url_writes(
+    captures: dict[str, Any], context: _DeriveContext
+) -> dict[str, tuple[tuple[tuple[str, str], ...], ...]]:
+    """The writes under a test each text of the `url` capture was read through, one entry per
+    path that read it (`Path.written_under`), keyed by the text `_assembled_text` gives:
+    `_walked_verbs`' record, for an address that is one of several."""
+    argument = _address_read(captures.get("url"), context)
+    at = argument.get(_CAPTURED_AT) if isinstance(argument, dict) else None
+    site = (
+        None
+        if at is None or context.values is None
+        else context.values.sites.get((str(at[0]), int(str(at[1]))))
+    )
+    if site is None or at is None or context.workspace is None:
+        return {}
+    under: dict[str, list[tuple[tuple[str, str], ...]]] = {}
+    for read, answers in resolve_positions_on_paths(
+        context.workspace, {"url": (site, at[2])}, context.values, within=context.path
+    ):
+        text = _assembled_text(answers["url"])[1]
+        if text is not None:
+            under.setdefault(text, []).append(read.written_under())
+    return {text: tuple(dict.fromkeys(writes)) for text, writes in under.items()}
 
 
 def _each_callers_url(

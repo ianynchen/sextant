@@ -51,6 +51,15 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A joined address over a name with several writes is one row for each value** (ruled
+  2026-11-28, OI-499). `prefix = ''`, `if T: prefix = p`, `path(f'{prefix}admin/', v)` gave
+  one row, `/admin/`, with no condition: the other value was dropped. Each value is a row
+  now, as each caller's value of a parameter is; an inbound row is served where its write
+  runs, and a leading piece of a served path that was not read is `<prefix>`, where it read
+  `<host>`. healthchecks: `/<prefix>admin/` and `/<prefix>admin/login/` are new, and the two
+  rows without the prefix state their condition. petclinic-api-gateway: `hostname +
+  "pets/visits…"` has a second outbound row, host not read, for the value `setHostname`
+  gives.
 - **A value written with no test, then again under a test, is read with the opposite test**
   (ruled 2026-11-27). `prefix = ''`, then `if T: prefix = p`: the two values exclude each
   other, and only the second had a condition. The value of the plain write now carries

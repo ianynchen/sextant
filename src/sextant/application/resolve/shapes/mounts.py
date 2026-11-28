@@ -83,6 +83,7 @@ from sextant.application.resolve.shapes.inbound_routes import (
     PATTERN_MOUNT_PATH,
     SINGLE_SLASH,
     TRAILING_SLASH,
+    UNREAD_PREFIX,
     UNROOTED_PATH,
     WILDCARD_MOUNT_POINT,
     WORDS,
@@ -137,10 +138,6 @@ _REFUSES = {
 }
 # The refusals a held prefix may declare: it is a prefix, read once, with no route below it.
 _HOLD_REFUSES = frozenset({"unrooted", "trailing_slash"})
-# The named hole a prefix nobody read is published as: `stitch/links.py`'s `_NAMED_HOLE`
-# grammar, so a path holding it is never linked by path (the `<host>` refusal applied to a
-# path segment).
-UNREAD_PREFIX = "<prefix>"
 # A template whose LAST piece is a hole (`{}`, `{name}`, `${…}`): what it ends with is unread.
 _UNREAD_END = re.compile(r"\{[^{}]*\}$")
 # The `open_questions` kind that says why a row's path holds it (`resolve/open_questions.py`

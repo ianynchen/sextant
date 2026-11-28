@@ -214,11 +214,15 @@ PATH_VARIABLE_MARKED = "path_variable_marked"
 PATH_VARIABLE_DEFAULT = "path_variable_default"
 
 
+# The named hole a prefix nobody read is published as: `stitch/links.py`'s `_NAMED_HOLE`
+# grammar, so a path holding it is never linked by path (the `<host>` refusal applied to a
+# path segment).
+UNREAD_PREFIX = "<prefix>"
 # What an unread piece of a partly read path starts with, each spelled by the layer that
-# owns it: the address reader's `<host>`, the walk's `{}` hole, and the `${…}` / `#{…}`
-# notations `canonical_http_path` already refuses to treat as a path half. A path starting
-# with one of these has an unknown first character.
-_UNKNOWN_START = (UNREADABLE_HOST, HOLE, *EXPRESSION_OPENS)
+# owns it: the address reader's `<host>`, the prefix hole, the walk's `{}` hole, and the
+# `${…}` / `#{…}` notations `canonical_http_path` already refuses to treat as a path half. A
+# path starting with one of these has an unknown first character.
+_UNKNOWN_START = (UNREADABLE_HOST, UNREAD_PREFIX, HOLE, *EXPRESSION_OPENS)
 
 
 def is_unrooted(path: str, read_whole: bool) -> bool:
