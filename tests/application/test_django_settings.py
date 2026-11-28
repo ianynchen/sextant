@@ -244,6 +244,9 @@ def test_a_setting_written_only_under_a_test_states_the_test(tmp_path: Path, lib
                 "    PARAMS = dict(a=1)\n"
                 "if ON:\n"
                 "    FIXED = 'f'\n"
+                "STORE = 'file'\n"
+                "if USE_S3:\n"
+                "    STORE = 's3'\n"
             ),
             "urls.py": _URLS,
         },
@@ -251,6 +254,9 @@ def test_a_setting_written_only_under_a_test_states_the_test(tmp_path: Path, lib
 
     config = _config(workspace)
     assert config[("app.settings", "BUCKET")] == ("b", None)
+    # Written with no test, then again under one (healthchecks `DATABASES`): always written,
+    # no condition.
+    assert ("app.settings", "STORE") in config
     assert config[("app.settings", "FIXED")] == ("f", None)
     # Written in both arms of one test: always written, no condition.
     assert ("app.settings", "MODE") in config

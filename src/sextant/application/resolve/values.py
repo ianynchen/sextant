@@ -7835,6 +7835,10 @@ class _Walk:
         ):
             # The write under its tests, where it runs under any (`_under`).
             here = _under(ran, symbol, writer, entry)
+            replaced = self._replaced(here, symbol, writer, entry, constants, produced, frames)
+            if replaced is None:
+                continue  # replaced in both arms of one test: read on no path
+            here = replaced
             # **A CONSTANT write needs no crossing** (`OI-138` cause 2): the value is in the
             # fact, so the answer is that literal on the path already travelled.
             #
@@ -7923,15 +7927,18 @@ class _Walk:
             # is the whole of the writing method after the call: a call made on the stored
             # object anywhere there changes what every later reader of the field sees.
             for ran in self._ran(entry, method, trail, frames):
-                reached.extend(
-                    self._entry(
-                        entry,
-                        method,
-                        (_BINDING, symbol, method),
-                        _under(ran, symbol, method, entry),
-                        frames,
-                    )
+                kept = self._replaced(
+                    _under(ran, symbol, method, entry),
+                    symbol,
+                    method,
+                    entry,
+                    constants,
+                    produced,
+                    frames,
                 )
+                if kept is None:
+                    continue  # replaced in both arms of one test: read on no path
+                reached.extend(self._entry(entry, method, (_BINDING, symbol, method), kept, frames))
         if len(reached) - members > PATH_CAP:
             return _only(trail, _unresolved(NON_ENUMERABLE))
         if not reached and (constants or produced):
@@ -7941,6 +7948,50 @@ class _Walk:
             # A star import can replace the name: the mark the decide step reads (`_truth`).
             reached = [(path, replace(answer, replaceable=True)) for path, answer in reached]
         return self._distinct(reached)
+
+    def _replaced(
+        self,
+        trail: _Trail,
+        symbol: str,
+        writer: str | None,
+        entry: Mapping[str, Any],
+        constants: "tuple[tuple[str | None, Mapping[str, Any]], ...]",
+        produced: "tuple[tuple[str, Mapping[str, Any]], ...]",
+        frames: "_Frames",
+    ) -> _Trail | None:
+        """`trail` for a write of `symbol` under no test that its method writes again under
+        one (`prefix = ""`, then `if T: prefix = p`; ruled 2026-11-27): the value is read
+        where each such test goes the other way, named as a write under a test is
+        (`Path.written_under`). None where both arms of one test write the name again.
+
+        The facts give a method's writes no order: the plain write is taken to come first
+        (the other order is a write that never has an effect). A write under a test that
+        reads the name itself (`x += [...]`) replaces nothing, a test decided false replaces
+        nothing (`_ran`), and a write under two tests gives no condition (not "A and B" is
+        no list of tests)."""
+        if writer is None or entry.get(_GUARDS) is not None:
+            return trail
+        flipped: dict[str, set[bool]] = {}
+        found = trail
+        for by, held in (*constants, *produced):
+            guards = held.get(_GUARDS)
+            if by != writer or guards is None or symbol in json.dumps(held, default=str):
+                continue
+            tests = _guards(str(guards))
+            if len(tests) != 1 or not self._ran(held, by, trail, frames):
+                continue
+            other = {**tests[0], "holds": not tests[0]["holds"]}
+            flipped.setdefault(str(other.get("test")), set()).add(bool(other["holds"]))
+            step = _Step(
+                (_WRITTEN_UNDER, writer, json.dumps([other], sort_keys=True)),
+                # Not `_A_WRITE`: the name is written either way (`Path.writes_under`).
+                f"{symbol} not written again under a test",
+            )
+            if step not in found:
+                found = (*found, step)
+        if any(len(arms) == 2 for arms in flipped.values()):
+            return None
+        return found
 
     def _names_a_list(self, symbol: str, seen: set[str]) -> bool:
         """Whether a write of the binding `symbol` is a list, or a name for one."""

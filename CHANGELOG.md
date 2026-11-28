@@ -51,6 +51,15 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A value written with no test, then again under a test, is read with the opposite test**
+  (ruled 2026-11-27). `prefix = ''`, then `if T: prefix = p`: the two values exclude each
+  other, and only the second had a condition. The value of the plain write now carries
+  "`T` is false", not evaluated (healthchecks: the 179 routes without the site prefix had no
+  condition while their 177 `<prefix>` twins had one; now 177 of them state it). A write
+  under a test that reads the name itself (`x += [...]`) replaces nothing; a write under two
+  tests gives no condition; a name both arms of one test write again is read on no path
+  through the plain write. Whether a configuration key is written does not change
+  (`Path.writes_under`).
 - **A test on a Django setting is decided per environment** (ruling R3 of 2026-11-25, the last
   step of the approved note; OI-570). `if settings.DEBUG: urlpatterns += [...]` with `DEBUG =
   False` in `settings.py` and `DEBUG = True` in `settings_dev.py` was "not evaluated" in both
