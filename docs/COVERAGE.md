@@ -790,8 +790,7 @@ numbers and the open issues (OI-418 to OI-474).
 **Python aiohttp and urllib3 outbound calls were built 2026-11-18** (`catalogs/aiohttp.yml`, `urllib3.yml`), so the Python REST-out cell is `✅`. The corpus has no real aiohttp or urllib3 call site, so the evidence is the wire probe and the fixture, not a real service. The same branch types a module variable set from a typed call (`settings = get_settings()`), which moved mealie's `endpoint_existence` from 8 `test` / 0 `property` to 5 `test` / 3 `property`.
 
 **Django inbound was built 2026-11-23 to 2026-11-24** (plan
-`docs/superpowers/plans/2026-11-23-python-django-redesign.md`, on the branch `cov/python-django`,
-not merged yet). Routes, prefixes, class views, method decorators and wrappers are read with
+`docs/superpowers/plans/2026-11-23-python-django-redesign.md`, merged as PR #113). Routes, prefixes, class views, method decorators and wrappers are read with
 mechanisms Sextant already had (the value walk, mounts, the servlet dispatch rule, the Spring
 `annotations` words); the new words are `router_named`, `root_setting`, `element` and the
 `request_reads` kind `method`. Against Django's own resolver on four real projects, the rows

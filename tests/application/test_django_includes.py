@@ -1217,3 +1217,38 @@ def test_a_route_list_of_three_hundred_members_is_read(tmp_path, libraries):
     rows = _served(tmp_path, libraries, {"urls.py": f"urlpatterns = [{members}]\n"})
 
     assert sorted(rows) == sorted(_row(f"/r{n}/") for n in range(300))
+
+
+def test_a_route_text_joined_from_a_name_with_two_writes_is_one_row_for_each(tmp_path, libraries):
+    """healthchecks `hc/urls.py:16`: `path(f"{prefix}admin/", ...)`, `prefix` written `""` and
+    again under a test. One row per value the joined text has, as a parameter's callers give
+    (ruled 2026-11-28; OI-499): the second was dropped, and `/admin/` read as served always.
+    Each row is served where its write runs, and the piece not read is the prefix hole, never
+    a host."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "import os\nROOT_URLCONF = 'app.urls'\n"
+            "SITE_ROOT = os.environ.get('SITE_ROOT', '')\n",
+            "urls.py": "from urllib.parse import urlparse\n"
+            "from django.conf import settings\n"
+            "prefix = ''\n"
+            "if _path := urlparse(settings.SITE_ROOT).path.lstrip('/'):\n"
+            "    prefix = f'{_path}/'\n"
+            "urlpatterns = [path(f'{prefix}x/', v), path(prefix + 'y/', v)]\n",
+        },
+    )
+
+    assert _rows(workspace) == [
+        _row("/<prefix>x/", "partial"),
+        _row("/<prefix>y/", "partial"),
+        _row("/x/"),
+        _row("/y/"),
+    ]
+    found = sorted(
+        (row["path"], json.loads(str(row["expression"]))["holds"])
+        for row in workspace.query("endpoint_existence")
+        if row["kind"] == "test"
+    )
+    assert found == [("/<prefix>x/", True), ("/<prefix>y/", True), ("/x/", False), ("/y/", False)]

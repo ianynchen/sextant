@@ -3706,8 +3706,9 @@ def test_a_path_whose_first_piece_is_unread_is_not_refused(tmp_path: Path):
     questions = _questions(workspace)
     workspace.close()
 
-    # Today's behaviour, unchanged: the row derives (the canonicaliser roots the unread piece).
-    assert [row["path"] for row in rows] == ["/<host>/x"]
+    # The row derives (the canonicaliser roots the unread piece), behind the prefix hole: a
+    # served path has no host (ruled 2026-11-28).
+    assert [row["path"] for row in rows] == ["/<prefix>/x"]
     assert questions == []
 
 
